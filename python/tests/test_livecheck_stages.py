@@ -128,6 +128,23 @@ def test_parser_matches_the_gate_it_stands_in_for():
     assert accepted is True
 
 
+# --- stage 2: the private account stream ---------------------------------
+
+def test_account_stream_check_carries_the_stream_health():
+    health = {'state': 'connected', 'connected': True, 'messages': 3, 'reconnects': 0}
+    check = s2.evaluate_account_stream(True, True, [], 75, health=health)
+    assert check.ok
+    assert '3 private message(s)' in check.detail
+    assert check.data['health'] == health
+
+
+def test_account_stream_reconnects_fail_whatever_the_health_says():
+    check = s2.evaluate_account_stream(
+        True, True, ['Private account stream reconnecting: ConnectionClosedError'], 75,
+        health={'state': 'connected', 'messages': 9})
+    assert not check.ok and 'reconnect warning' in check.detail
+
+
 # --- stage 3: the NO mirror ------------------------------------------------
 
 def test_a_correct_mirror_reports_nothing():
