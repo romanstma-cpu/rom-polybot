@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import time
 
 import websockets
 
@@ -24,11 +25,23 @@ _task = None
 _dirty = False
 log = logging.getLogger(__name__)
 
+# Observability for health(). The counters are cumulative for the process,
+# like the market stream's, so a reconnect loop stays visible after stop().
+_connected = False
+_connected_at = 0.0
+_last_message_at = 0.0
+_last_disconnect_at = 0.0
+_messages = 0
+_reconnects = 0
+_last_error = ''
+
 
 def ingest(message):
     """Record private order updates and flag account state for reconciliation."""
-    global _dirty
+    global _dirty, _messages, _last_message_at
 
+    _messages += 1
+    _last_message_at = time.monotonic()
     if message.get('error'):
         raise ValueError('Private subscription rejected')
 
@@ -54,6 +67,33 @@ def consume_dirty():
     return was_dirty
 
 
+def health():
+    """Connection state for operators and the livecheck stream stage.
+
+    The private feed is quiet whenever the account is, so unlike the market
+    stream there is no staleness verdict: message age is context, and the
+    websocket's own pings are what detect a dead connection.
+    """
+    now = time.monotonic()
+    running = _task is not None and not _task.done()
+    if _connected:
+        state = 'connected'
+    elif running:
+        state = 'reconnecting'
+    else:
+        state = 'stopped'
+    return {
+        'state': state,
+        'connected': bool(_connected),
+        'connectedSeconds': round(now-_connected_at, 1) if _connected and _connected_at else None,
+        'messages': _messages,
+        'lastMessageAgeSeconds': round(max(0.0, now-_last_message_at), 1) if _last_message_at else None,
+        'reconnects': _reconnects,
+        'lastDisconnectAt': _last_disconnect_at or None,
+        'lastError': _last_error,
+    }
+
+
 def start():
     """Start the private stream once authenticated, unless it is already running."""
     global _task
@@ -64,7 +104,7 @@ def start():
 
 async def stop():
     """Stop the private stream and clear its pending reconciliation signal."""
-    global _task, _dirty
+    global _task, _dirty, _connected, _connected_at
 
     if _task:
         _task.cancel()
@@ -73,6 +113,7 @@ async def stop():
         except asyncio.CancelledError:
             pass
     _task, _dirty = None, False
+    _connected, _connected_at = False, 0.0
 
 
 async def _subscribe(ws):
@@ -88,7 +129,8 @@ async def _subscribe(ws):
 
 async def _run():
     """Keep the private stream connected and request reconciliation after gaps."""
-    global _dirty
+    global _dirty, _connected, _connected_at, _last_disconnect_at
+    global _reconnects, _last_error
 
     while auth.credentials_present():
         try:
@@ -98,14 +140,21 @@ async def _run():
                 ping_interval=20,
                 ping_timeout=20,
             ) as ws:
-                await _subscribe(ws)
-                # Always reconcile after reconnect; streams can have gaps.
-                _dirty = True
-                async for payload in ws:
-                    ingest(json.loads(payload))
+                _connected, _connected_at = True, time.monotonic()
+                try:
+                    await _subscribe(ws)
+                    # Always reconcile after reconnect; streams can have gaps.
+                    _dirty = True
+                    async for payload in ws:
+                        ingest(json.loads(payload))
+                finally:
+                    _connected, _connected_at = False, 0.0
+                    _last_disconnect_at = time.monotonic()
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             _dirty = True
+            _reconnects += 1
+            _last_error = type(exc).__name__
             log.warning('Private account stream reconnecting: %s', type(exc).__name__)
             await asyncio.sleep(5)

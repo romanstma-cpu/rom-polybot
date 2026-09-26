@@ -6,16 +6,28 @@ json.loads); consume_dirty() is polled by the service loop.
 """
 from __future__ import annotations
 
+import asyncio
+import json
+
 import pytest
 
 import us_account_stream as stream
 
 
+def _reset():
+    stream._dirty = False
+    stream._task = None
+    stream._connected, stream._connected_at = False, 0.0
+    stream._last_message_at = stream._last_disconnect_at = 0.0
+    stream._messages = stream._reconnects = 0
+    stream._last_error = ''
+
+
 @pytest.fixture(autouse=True)
 def reset_dirty():
-    stream._dirty = False
+    _reset()
     yield
-    stream._dirty = False
+    _reset()
 
 
 class TestConsumeDirty:
@@ -121,3 +133,58 @@ class TestIngestMessageRouting:
         assert orders == [{"id": "1"}]
         assert execs == [{"order_id": "2"}]
         assert stream._dirty is True
+
+class TestHealth:
+    def test_idle_stream_reports_stopped(self):
+        h = stream.health()
+        assert h['state'] == 'stopped' and h['connected'] is False
+        assert h['messages'] == 0 and h['reconnects'] == 0
+        assert h['lastMessageAgeSeconds'] is None and h['lastError'] == ''
+
+    def test_ingest_counts_every_message(self):
+        stream.ingest({"type": "ping"})
+        stream.ingest({"accountBalancesSnapshot": {}})
+        h = stream.health()
+        assert h['messages'] == 2
+        assert h['lastMessageAgeSeconds'] is not None
+
+    def test_a_dropped_connection_is_visible_before_the_retry(self, monkeypatch):
+        """Connected while the socket is open; disconnected, counted and named
+        during the back-off, not only once the next connect succeeds."""
+        seen = {}
+        passes = iter([True])
+
+        class Socket:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_exc):
+                return False
+
+            async def send(self, _frame):
+                pass
+
+            def __aiter__(self):
+                return self._frames()
+
+            async def _frames(self):
+                yield json.dumps({"accountBalancesSnapshot": {}})
+                seen['open'] = stream.health()
+                raise ConnectionResetError('dropped')
+
+        async def back_off(_seconds):
+            seen['backing_off'] = stream.health()
+
+        monkeypatch.setattr(stream.auth, 'credentials_present', lambda: next(passes, False))
+        monkeypatch.setattr(stream.auth, 'l2_headers', lambda *_a: {})
+        monkeypatch.setattr(stream.websockets, 'connect', lambda *_a, **_kw: Socket())
+        monkeypatch.setattr(stream.asyncio, 'sleep', back_off)
+        asyncio.run(stream._run())
+
+        assert seen['open']['connected'] is True and seen['open']['state'] == 'connected'
+        assert seen['open']['messages'] == 1
+        off = seen['backing_off']
+        assert off['connected'] is False
+        assert off['reconnects'] == 1 and off['lastError'] == 'ConnectionResetError'
+        assert off['lastDisconnectAt'] is not None
+        assert stream._dirty is True  # the gap still asks for reconciliation

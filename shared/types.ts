@@ -684,6 +684,17 @@ export interface TradingStatus {
       subscriptionRejections?: number;
       lastSubscriptionError?: string;
     };
+    /** Private order/position/balance feed. Quiet when the account is, so no staleness verdict. */
+    accountStream?: {
+      state: 'connected' | 'reconnecting' | 'stopped' | 'unknown';
+      connected: boolean;
+      connectedSeconds?: number | null;
+      messages?: number;
+      lastMessageAgeSeconds?: number | null;
+      reconnects?: number;
+      lastDisconnectAt?: number | null;
+      lastError?: string;
+    };
   };
   mainMode: 'paused' | 'paper' | 'live';
   mainState: 'paused' | 'scanning' | 'waiting' | 'blocked';
