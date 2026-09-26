@@ -63,6 +63,7 @@ def tick_to_asset(row: dict, cfg: dict, close_iso: str) -> dict:
     up_ask = row.get("up_ask")
     if up_ask is None and fav == "up" and row.get("ws_ask") is not None:
         up_ask = yes_ask
+    model_prob, edge_net = _reprice_model(row, cfg, ml, up_ask, no_ask)
     out = {
         "asset": row.get("asset"), "ticker": row.get("ticker"),
         "series": f"{row.get('asset')}-updown", "hasMarket": True,
@@ -70,8 +71,8 @@ def tick_to_asset(row: dict, cfg: dict, close_iso: str) -> dict:
         "favorite": fav, "favoritePrice": fav_price, "entryCost": entry_cost,
         "minsLeft": float(ml) if ml is not None else None,
         "inWindow": in_window, "signal": signal, "hourUtc": hour,
-        "modelProb": row.get("model_prob"),
-        "edgeNetCents": row.get("edge_net_cents"),
+        "modelProb": model_prob,
+        "edgeNetCents": edge_net,
         "spotLive": ("rtds-ws" in src) or ("coinbase-ws" in src),
         "upAsk": up_ask, "downAsk": no_ask,
         "yesBid": yes_bid, "yesAsk": yes_ask,
@@ -98,6 +99,34 @@ def tick_to_asset(row: dict, cfg: dict, close_iso: str) -> dict:
     }
     crypto15m.derive_script_fields(out, crypto15m._interval(cfg))
     return out
+
+
+def _num(v) -> Optional[float]:
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
+
+
+def _reprice_model(row: dict, cfg: dict, mins_left, up_ask, no_ask):
+    """The model probability and edge this config would have seen.
+
+    A tick stores the probability of whichever model was live when it was
+    recorded. Replaying that number would score every tail setting on the old
+    model's calls, so the tick is re-priced from its recorded spot, strike,
+    volatility and time left. A tick missing any of those keeps its recorded
+    values.
+    """
+    strike = row.get("strike") if row.get("strike") is not None else row.get("open_spot")
+    prob = crypto15m.model_up_prob(
+        _num(row.get("spot")), _num(strike), _num(row.get("sigma1m")),
+        _num(mins_left), crypto15m.model_tail_dof(cfg))
+    if prob is None:
+        return row.get("model_prob"), row.get("edge_net_cents")
+    at = crypto15m.asset_fee_at({"observedAt": row.get("observed_at")})
+    return prob, crypto15m.model_edge_net_cents(
+        prob, _num(up_ask), _num(no_ask), None, at)
 
 
 def _tick_epoch(row: dict) -> Optional[float]:

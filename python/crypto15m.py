@@ -399,6 +399,88 @@ def _norm_cdf(x: float) -> float:
     return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
 
 
+# Tail weight of the terminal-spot model, as Student-t degrees of freedom.
+# One-minute crypto returns have far fatter tails than a normal curve: moves of
+# three or more sigma arrive many times more often than its 0.27%. The engine
+# buys at 97-99c on exactly those tails, where one wrong call costs what dozens
+# of right ones earn, so a normal model there is overconfident in the one
+# place it cannot afford to be. Five degrees of freedom (excess kurtosis 6) is
+# in the range measured for minute-scale crypto returns; 0 keeps the old
+# normal model. Settings take any value from 2.5 up.
+DEFAULT_TAIL_DOF = 5.0
+MIN_TAIL_DOF = 2.5
+
+
+def model_tail_dof(cfg: Optional[dict]) -> float:
+    """The configured tail weight; 0 means the normal model."""
+    raw = (cfg or {}).get("crypto15m_model_tail_dof", DEFAULT_TAIL_DOF)
+    try:
+        dof = float(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_TAIL_DOF
+    if not math.isfinite(dof) or dof < 0:
+        return DEFAULT_TAIL_DOF
+    if dof == 0:
+        return 0.0
+    return max(MIN_TAIL_DOF, dof)
+
+
+def _beta_cf(a: float, b: float, x: float) -> float:
+    """Continued fraction for the incomplete beta function (modified Lentz)."""
+    tiny = 1e-300
+    qab, qap, qam = a + b, a + 1.0, a - 1.0
+    c, d = 1.0, 1.0 - qab * x / qap
+    d = 1.0 / (d if abs(d) > tiny else tiny)
+    h = d
+    for m in range(1, 300):
+        m2 = 2 * m
+        aa = m * (b - m) * x / ((qam + m2) * (a + m2))
+        d = 1.0 + aa * d
+        d = 1.0 / (d if abs(d) > tiny else tiny)
+        c = 1.0 + aa / c
+        c = c if abs(c) > tiny else tiny
+        h *= d * c
+        aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2))
+        d = 1.0 + aa * d
+        d = 1.0 / (d if abs(d) > tiny else tiny)
+        c = 1.0 + aa / c
+        c = c if abs(c) > tiny else tiny
+        delta = d * c
+        h *= delta
+        if abs(delta - 1.0) < 1e-15:
+            break
+    return h
+
+
+def _beta_inc(a: float, b: float, x: float) -> float:
+    """Regularized incomplete beta I_x(a, b)."""
+    if x <= 0.0:
+        return 0.0
+    if x >= 1.0:
+        return 1.0
+    front = math.exp(math.lgamma(a + b) - math.lgamma(a) - math.lgamma(b)
+                     + a * math.log(x) + b * math.log1p(-x))
+    if x < (a + 1.0) / (a + b + 2.0):
+        return front * _beta_cf(a, b, x) / a
+    return 1.0 - front * _beta_cf(b, a, 1.0 - x) / b
+
+
+def _student_t_cdf(t: float, dof: float) -> float:
+    tail = 0.5 * _beta_inc(dof / 2.0, 0.5, dof / (dof + t * t))
+    return 1.0 - tail if t > 0 else tail
+
+
+def _move_cdf(z: float, tail_dof: float) -> float:
+    """P(terminal move < z standard deviations) under the chosen tails.
+
+    The Student-t is rescaled to unit variance, so `sigma_1m` keeps meaning
+    what it measures and only the shape of the tails changes.
+    """
+    if not tail_dof:
+        return _norm_cdf(z)
+    return _student_t_cdf(z * math.sqrt(tail_dof / (tail_dof - 2.0)), tail_dof)
+
+
 FEE_EXPONENT_CRYPTO = 1.0
 
 
@@ -448,6 +530,7 @@ def _fee_cents(
 def model_up_prob(
     spot: Optional[float], strike: Optional[float],
     sigma_1m: Optional[float], mins_left: Optional[float],
+    tail_dof: float = DEFAULT_TAIL_DOF,
 ) -> Optional[float]:
     if spot is None or strike is None or sigma_1m is None or mins_left is None:
         return None
@@ -457,7 +540,7 @@ def model_up_prob(
     sd_abs = sigma_1m * math.sqrt(t) * spot
     if sd_abs <= 0:
         return None
-    return max(0.0, min(1.0, _norm_cdf((spot - strike) / sd_abs)))
+    return max(0.0, min(1.0, _move_cdf((spot - strike) / sd_abs, tail_dof)))
 
 
 def model_edge_net_cents(
@@ -680,7 +763,8 @@ async def _asset_snapshot(entry: dict, spot: Optional[float], cfg: dict, now_epo
         out["spotLive"] = (
             rtds_ws.spot(asset) is not None or spot_ws.spot(asset) is not None
         )
-        mp = model_up_prob(spot, open15m, ind.get("sigma1m"), mins_left)
+        mp = model_up_prob(spot, open15m, ind.get("sigma1m"), mins_left,
+                           model_tail_dof(cfg))
         out["modelProb"] = round(mp, 4) if mp is not None else None
         out["feeSchedule"] = m.get("fee_schedule")
         out["edgeNetCents"] = model_edge_net_cents(

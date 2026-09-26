@@ -11,6 +11,7 @@ from typing import Optional
 
 import account_risk
 import crypto15m
+import crypto15m_evidence
 import db
 import polymarket_api
 import rules as rules_engine
@@ -42,6 +43,30 @@ def _wilson_lb(wins: int, n: int, z: float = 1.645) -> float:
     return max(0.0, (center - rad) / denom)
 
 
+def _wilson_ub(wins: int, n: int, z: float = 1.0) -> float:
+    if n <= 0:
+        return 1.0
+    p = wins / n
+    denom = 1.0 + z * z / n
+    center = p + z * z / (2 * n)
+    rad = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n))
+    return min(1.0, (center + rad) / denom)
+
+
+def _break_even(row) -> Optional[float]:
+    """What a unit of the model's side cost at this tick: ask plus taker fee."""
+    side_up = float(row["model_prob"]) >= 0.5
+    ask = row["up_ask"] if side_up else row["no_ask"]
+    try:
+        ask = float(ask)
+    except (TypeError, ValueError):
+        return None
+    if not 0.0 < ask < 1.0:
+        return None
+    at = crypto15m.asset_fee_at({"observedAt": row["observed_at"]})
+    return ask + crypto15m._fee_cents(ask * 100.0, None, at) / 100.0
+
+
 def check_model_calibration(env: str, interval: str = "15m") -> dict:
     now = time.time()
     if now - _CAL_CACHE["at"] < _CAL_CHECK_SEC and _CAL_CACHE.get("interval") == interval:
@@ -49,7 +74,8 @@ def check_model_calibration(env: str, interval: str = "15m") -> dict:
     try:
         with db.get_db() as conn:
             rows = conn.execute(
-                """SELECT t.ticker, t.model_prob, s.up_won
+                """SELECT t.ticker, t.model_prob, t.up_ask, t.no_ask,
+                          t.observed_at, s.up_won
                    FROM crypto15m_ticks t
                    JOIN crypto15m_signals s
                      ON s.ticker = t.ticker AND s.network = t.network
@@ -76,15 +102,42 @@ def check_model_calibration(env: str, interval: str = "15m") -> dict:
     lb = _wilson_lb(wins, n)
     prev_ok = bool(_CAL_CACHE.get("ok", True))
     if n < _CAL_MIN_N:
-        ok = True
+        hit_ok = True
     elif prev_ok:
-        ok = lb >= _CAL_PAUSE_LB
+        hit_ok = lb >= _CAL_PAUSE_LB
     else:
-        ok = lb >= _CAL_RESUME_LB
+        hit_ok = lb >= _CAL_RESUME_LB
+
+    # A hit rate is only good relative to the price paid for it: 94% right is
+    # a loss when each call costs 97c. So the same calls are also scored
+    # against what their side cost at that tick. Pause once even the
+    # optimistic end of the hit rate falls short of that cost; resume only
+    # when the hit rate itself clears it again.
+    priced = [(r, _break_even(r)) for r in recent]
+    priced = [(r, cost) for r, cost in priced if cost is not None]
+    pn = len(priced)
+    p_wins = sum(1 for r, _c in priced
+                 if (float(r["model_prob"]) >= 0.5) == bool(r["up_won"]))
+    break_even = sum(c for _r, c in priced) / pn if pn else None
+    if pn < _CAL_MIN_N:
+        econ_ok = True
+    elif prev_ok:
+        econ_ok = _wilson_ub(p_wins, pn) >= break_even
+    else:
+        econ_ok = p_wins / pn >= break_even
+
+    ok = hit_ok and econ_ok
+    reason = ""
+    if not hit_ok:
+        reason = (f"{wins}/{n} recent high-confidence calls landed "
+                  f"(lower bound {lb:.0%})")
+    elif not econ_ok:
+        reason = (f"recent high-confidence calls hit {p_wins / pn:.1%} but cost "
+                  f"{break_even * 100:.1f}c on average, so they lost money at "
+                  f"the prices on offer")
     if prev_ok and not ok:
         logger.warning(
-            f"[crypto15m] MODEL CALIBRATION DEGRADED: {wins}/{n} recent "
-            f"sniper-band predictions hit (LB {lb:.3f} < {_CAL_PAUSE_LB}) — "
+            f"[crypto15m] MODEL CALIBRATION DEGRADED: {reason} — "
             f"auto-pausing model-mode entries"
         )
     elif not prev_ok and ok:
@@ -92,6 +145,9 @@ def check_model_calibration(env: str, interval: str = "15m") -> dict:
     _CAL_CACHE.update({
         "at": now, "ok": ok, "n": n, "interval": interval,
         "rate": round(wins / n, 4) if n else None, "lb": round(lb, 4),
+        "pricedN": pn,
+        "breakEven": round(break_even, 4) if break_even is not None else None,
+        "reason": reason,
     })
     return dict(_CAL_CACHE)
 
@@ -322,10 +378,9 @@ def should_enter(asset: dict, cfg: dict, *, has_open: bool, open_count: int) -> 
         if cfg.get("crypto15m_model_autopause", True):
             cal = check_model_calibration(trader.get_env(), crypto15m._interval(cfg))
             if not cal.get("ok", True):
-                return False, (
-                    f"model calibration degraded ({cal.get('rate') or 0:.0%} hit over "
-                    f"last {cal.get('n', 0)} windows) — auto-paused"
-                )
+                why = cal.get("reason") or (
+                    f"{cal.get('rate') or 0:.0%} hit over last {cal.get('n', 0)} windows")
+                return False, f"model calibration degraded ({why}) — auto-paused"
         ml = asset.get("minsLeft")
         final_minute = ml is not None and 0.0 < float(ml) < 1.0
         if final_minute:
@@ -336,7 +391,7 @@ def should_enter(asset: dict, cfg: dict, *, has_open: bool, open_count: int) -> 
             if float(ml) < 0.1:
                 return False, "too close to the close for an order round-trip"
             if p_side < _FM_MIN_PROB:
-                return False, f"model {p_side:.4f} < {_FM_MIN_PROB} (3-sigma gate)"
+                return False, f"model {p_side:.4f} < {_FM_MIN_PROB} (final-minute gate)"
         elif not asset.get("inWindow"):
             return False, "outside entry window"
         else:
@@ -1937,6 +1992,12 @@ async def run_tick(cfg: dict, *, authed: bool) -> list[dict]:
         logger.info(f"[crypto15m] {_lock_why}")
         return updated
 
+    # Replays the configured strategy in the background; entries below wait
+    # for a verdict. Parlay schedules are exempt: each hour's config was
+    # already chosen on held-out windows by the parlay generator.
+    if crypto15m_evidence.required(cfg):
+        crypto15m_evidence.ensure_fresh(cfg, env)
+
     parlay_armed, parlay_sched = parlay_state()
     parlay_cfg = None
     parlay_block = ""
@@ -1973,6 +2034,11 @@ async def run_tick(cfg: dict, *, authed: bool) -> list[dict]:
         if not ok:
             _block_reasons[a.get("asset") or sym or "?"] = _why
             continue
+        if not eff_cfg.get("_parlay"):
+            proven, proven_why = crypto15m_evidence.gate(cfg, env)
+            if not proven:
+                _block_reasons[a.get("asset") or sym or "?"] = proven_why
+                continue
         # UPGRADE-5 is account-wide: this engine's positions were already
         # counted against the cap, but it never consulted it, so it could open
         # past a limit it was helping to fill.
@@ -2046,6 +2112,14 @@ async def _sizing_preview(cfg: dict, authed: bool) -> dict:
     }
 
 
+def _evidence_for_status(cfg: dict, env: str) -> Optional[dict]:
+    # Viewing the page starts the replay too, so a verdict on these settings
+    # is there before the engine is switched on, not only after.
+    if crypto15m_evidence.required(cfg):
+        crypto15m_evidence.ensure_fresh(cfg, env)
+    return crypto15m_evidence.verdict(cfg, env)
+
+
 async def status(cfg: dict, *, authed: bool = False) -> dict:
     env = trader.get_env()
     with db.get_db() as conn:
@@ -2072,6 +2146,8 @@ async def status(cfg: dict, *, authed: bool = False) -> dict:
         "blockReasons": dict(_block_reasons),
         "byStrategy": by_strategy,
         "modelCalibration": dict(_CAL_CACHE),
+        "evidenceRequired": crypto15m_evidence.required(cfg),
+        "evidence": _evidence_for_status(cfg, env),
         "orderSize": int(cfg.get("crypto15m_order_size", 1)),
         "maxConcurrent": int(cfg.get("crypto15m_max_concurrent", len(crypto15m.SERIES))),
         "sizing": await _sizing_preview(cfg, authed),

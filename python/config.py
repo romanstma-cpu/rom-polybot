@@ -179,6 +179,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "crypto15m_direction_mode": "favorite",
     "crypto15m_model_min_prob": 0.97,
     "crypto15m_model_min_edge_cents": 2.0,
+    "crypto15m_model_tail_dof": 5.0,
+    "crypto15m_require_proven_edge": True,
     "crypto15m_model_final_minute": True,
     "crypto15m_model_autopause": True,
     "crypto15m_model_max_book_gap_cents": 25.0,
@@ -672,6 +674,13 @@ def _validate_config(cfg: dict[str, Any]) -> dict[str, Any]:
     cfg["crypto15m_model_min_edge_cents"] = _clampf(
         cfg.get("crypto15m_model_min_edge_cents"), 0.0, 50.0,
         d["crypto15m_model_min_edge_cents"])
+    # 0 is the normal model; anything else is Student-t tail weight, where
+    # below 2.5 the variance barely exists.
+    _dof = _as_float(cfg.get("crypto15m_model_tail_dof"), d["crypto15m_model_tail_dof"])
+    cfg["crypto15m_model_tail_dof"] = (
+        0.0 if _dof == 0 else _clampf(_dof, 2.5, 100.0, d["crypto15m_model_tail_dof"]))
+    cfg["crypto15m_require_proven_edge"] = bool(cfg.get(
+        "crypto15m_require_proven_edge", d["crypto15m_require_proven_edge"]))
     cfg["crypto15m_model_final_minute"] = bool(
         cfg.get("crypto15m_model_final_minute", d["crypto15m_model_final_minute"]))
     cfg["crypto15m_model_max_book_gap_cents"] = _clampf(

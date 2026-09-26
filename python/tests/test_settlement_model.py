@@ -332,7 +332,7 @@ def test_final_minute_needs_live_ws_spot():
 def test_final_minute_three_sigma_gate():
     a = _asset(minsLeft=0.5, modelProb=0.99)
     ok, why = c15t.should_enter(a, _model_cfg(), has_open=False, open_count=0)
-    assert not ok and "3-sigma" in why
+    assert not ok and "final-minute gate" in why
     a2 = _asset(minsLeft=0.5, modelProb=0.9990)
     ok2, why2 = c15t.should_enter(a2, _model_cfg(), has_open=False, open_count=0)
     assert ok2, why2

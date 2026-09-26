@@ -35,6 +35,9 @@ def cfg():
     c["crypto15m_enabled"] = True
     c["crypto15m_order_size"] = 1
     c["crypto15m_entry_style"] = "taker"
+    # These tests exercise order placement; the evidence gate has its own
+    # suite in test_crypto15m_edge.py.
+    c["crypto15m_require_proven_edge"] = False
     return c
 
 
@@ -1676,3 +1679,29 @@ def test_compute_entry_contracts_streak_respects_risk_caps(cfg):
     n = ct.compute_entry_contracts(
         cfg, entry_limit_cents=50, balance_usd=100, order_size=8, streak_mult=4.0)
     assert n == 10
+
+
+def test_live_entries_wait_for_proven_edge(fresh_db, env_net, cfg, monkeypatch):
+    """With the gate on, a signal alone places nothing until the replayed
+    evidence qualifies, and the reason is shown for the asset."""
+    import crypto15m_evidence as ev
+    ev._verdicts.clear()
+    ev._refreshing.clear()
+    cfg["crypto15m_require_proven_edge"] = True
+    monkeypatch.setattr(ev, "ensure_fresh", lambda *_a: None)
+    monkeypatch.setattr(crypto15m, "snapshot", _stub_snapshot([signal_asset()]))
+    calls = _capture_orders(monkeypatch)
+
+    run_async(ct.run_tick(cfg, authed=True))
+    assert calls == []
+    assert "no proven edge" in ct._block_reasons["BTC"]
+
+    ev._verdicts[("mainnet", ev.fingerprint(cfg))] = {
+        "qualified": False, "reason": "not proven: later half lost", "evaluatedAt": 0}
+    run_async(ct.run_tick(cfg, authed=True))
+    assert calls == [] and "later half lost" in ct._block_reasons["BTC"]
+
+    ev._verdicts[("mainnet", ev.fingerprint(cfg))]["qualified"] = True
+    run_async(ct.run_tick(cfg, authed=True))
+    assert len(calls) == 1
+    ev._verdicts.clear()
