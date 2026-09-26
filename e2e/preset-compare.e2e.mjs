@@ -28,7 +28,7 @@ try {
   await page.getByRole('cell', {name: 'Contrarian fade'}).waitFor({timeout: 90000});
   await page.getByRole('button', {name: 'Compare presets on my data'}).waitFor({timeout: 90000});
   const rows = await page.locator('table tbody tr').allInnerTexts();
-  assert.equal(rows.length, 6, rows.join('\n'));
+  assert.equal(rows.length, 7, rows.join('\n'));
   // A fresh profile has recorded nothing, so no preset can be proven.
   assert.ok(rows.every((r) => r.includes('not enough evidence')), rows.join('\n'));
   assert.deepEqual(errors, []);

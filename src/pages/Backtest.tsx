@@ -22,6 +22,17 @@ const C15_STRATS: { id: string; name: string; patch: Partial<TraderConfig> }[] =
     },
   },
   {
+    // Same preset on the old normal-curve model, so the effect of the
+    // fat-tailed default shows up on your own windows.
+    id: 'sniper-normal', name: 'Settlement Sniper (old normal-curve model)',
+    patch: {
+      ...C15_PRESET_CORE.sniper,
+
+      crypto15mModelMinProb: 0.97, crypto15mTimeDelayMin: 5, crypto15mEntryMax: 0.97,
+      crypto15mModelTailDof: 0,
+    },
+  },
+  {
     id: 'sniper-5m', name: '5m Sniper (BTC)',
     patch: { ...C15_PRESET_CORE['sniper-5m'] },
   },
