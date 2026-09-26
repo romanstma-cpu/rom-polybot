@@ -24,29 +24,18 @@ Rules for this file:
 
 ## Later
 
-- [ ] **`require_entry_depth` is unvalidated config**
-  Not in any clamp list in `_validate_config`; read as a bare
-  `cfg.get(..., True)`. Any falsy stored value silently disables the whole
-  Upgrade 6 depth gate.
-- [ ] **`cancel_pending` write skips the FULL-sync discipline**
-  `polymarket_api.py:316` writes it before the cancel POST without
-  `synchronous=FULL` or `BEGIN IMMEDIATE`, unlike every other pre-network
-  journal write. Power loss there could leave the intent at `open`.
-- [ ] **Attaching an already-owned exchange id raises `sqlite3.IntegrityError`**
-  Correctly refused and nothing written, but the message is opaque. Should be
-  `RecoveryRequired`.
-- [ ] **Undocumented hard-coded execution limits**
-  `execution_quality.entry_price` enforces a 3c max spread and 2c max chase.
-  No config key, no doc, no settings surface.
-- [ ] **`use_rules=True` silently drops the entry price floor to 1c**
-  `trader.py:570`. Undocumented interaction with `min_entry_price_cents`.
-- [ ] **Stream modules expose no health state**
-  No reconnect count, message count or connected flag on the two authenticated
-  US streams; `stats()` on activity/rtds/spot has zero callers. Blocks the
-  stream-health harness stage.
+(nothing queued)
 
 ## Done
 
+- [x] **Backlog sweep.** Four "Later" items were already fixed and still
+      listed: `require_entry_depth` validation, `cancel_pending` durability
+      and the `RecoveryRequired` attach error (876a8ad), and configurable
+      entry spread and chase limits (0d96f26). The other two are fixed now:
+      rule-based entries are held to their entry-cost rule at the order price
+      (the floor used to drop to 1c), and the private account stream reports
+      `health()`, surfaced as `accountStream` in execution health and in
+      livecheck stage 2.
 - [x] **crypto15m and copy_trader now consult the group cap.** Their exposure
       was already counted; neither read the allowance, so both could open past
       a limit their own fills were filling. Both now refuse a full group and
