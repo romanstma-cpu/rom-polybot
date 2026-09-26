@@ -1,38 +1,48 @@
 name: Build Installers
 
-# Builds the Apple Silicon installer and publishes it as an asset on a per-run
-# GitHub *prerelease*. Release assets do not count against Actions artifact
-# storage and do not expire. This workflow does not wire up auto-update.
+# Builds the Windows and Apple Silicon installers from the same commit, each
+# on its own runner, and tests the packaged backend before anything ships.
 #
-# The Python backend is frozen with PyInstaller on a native Apple Silicon
-# runner. The packaged backend and app are tested before release.
+# A push to `build` (or `main`) publishes each installer as an asset on a
+# per-run GitHub *prerelease*; release assets do not count against Actions
+# artifact storage and do not expire. Any other run — a manual dispatch from a
+# branch, for example — keeps the installers as workflow artifacts for a week
+# and publishes nothing, so a change to this pipeline can be tested before it
+# is trusted. This workflow does not wire up auto-update.
+#
+# The Windows installer used to be built by hand on a personal machine. Built
+# here, both platforms come from a tagged, reproducible run, which is also what
+# SignPath requires before it will sign anything.
 on:
   push:
-    branches: [main, build, codex/polybot-macos]
+    branches: [main, build]
   workflow_dispatch: {}
 
 # contents: write is required to create the release and upload installer assets.
 permissions:
   contents: write
 
+env:
+  PUBLISH: ${{ github.event_name == 'push' }}
+
 jobs:
-  build:
+  mac:
     name: mac-apple-silicon
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '22'
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
-          python-version: '3.11'
+          python-version: '3.12'
 
       - name: Install Node dependencies
         run: npm ci
@@ -65,10 +75,8 @@ jobs:
           test -n "$FILE"
           shasum -a 256 "$FILE" > release/SHA256SUMS-mac-apple-silicon.txt
 
-      # Publish the Apple Silicon disk image as an asset on a per-run prerelease.
-      # Release assets are exempt
-      # from the Actions artifact storage quota that was failing uploads before.
-      - name: Publish installers to a GitHub Release
+      - name: Publish installer to a GitHub Release
+        if: env.PUBLISH == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: polybot-mac-${{ github.run_number }}
@@ -83,3 +91,83 @@ jobs:
           files: |
             release/*-arm64.dmg
             release/SHA256SUMS-mac-apple-silicon.txt
+
+      - name: Keep the installer (not published)
+        if: env.PUBLISH != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: rom-polybot-mac-apple-silicon
+          path: |
+            release/*-arm64.dmg
+            release/SHA256SUMS-mac-apple-silicon.txt
+          retention-days: 7
+
+  windows:
+    name: windows-x64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      # On Windows the gate also runs the Electron UI audit.
+      - name: Production release gate
+        run: npm run release:gate
+
+      - name: Build app, bundle backend, package installer
+        shell: bash
+        run: |
+          npm run py:dist
+          npx electron-builder --win nsis --x64
+
+      - name: Verify packaged backend and installer
+        shell: bash
+        run: |
+          release/win-unpacked/resources/python/rom-polybot-backend.exe --selftest
+          FILE=$(find release -maxdepth 1 -name '*-Setup-*.exe' -type f | head -1)
+          test -n "$FILE"
+          # Same format as the site's SHA256SUMS files: upper-case hash, two
+          # spaces, and the name GitHub gives the asset (spaces become dots).
+          HASH=$(sha256sum "$FILE" | cut -d' ' -f1 | tr a-f A-F)
+          echo "$HASH  $(basename "$FILE" | tr ' ' '.')" > release/SHA256SUMS-windows-x64.txt
+          cat release/SHA256SUMS-windows-x64.txt
+
+      - name: Publish installer to a GitHub Release
+        if: env.PUBLISH == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: polybot-win-ci-${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          name: CI build ${{ github.run_number }} Windows (${{ github.sha }})
+          prerelease: true
+          make_latest: false
+          body: >
+            Unsigned Windows 10/11 x64 installer built from ${{ github.sha }}.
+            Windows may show an unknown-publisher warning; verify the file
+            against the SHA-256 published beside it.
+          files: |
+            release/*-Setup-*.exe
+            release/SHA256SUMS-windows-x64.txt
+
+      - name: Keep the installer (not published)
+        if: env.PUBLISH != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: rom-polybot-windows-x64
+          path: |
+            release/*-Setup-*.exe
+            release/SHA256SUMS-windows-x64.txt
+          retention-days: 7

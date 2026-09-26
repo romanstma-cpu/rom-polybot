@@ -18,13 +18,22 @@ def creds(tmp_path, monkeypatch):
     auth.save_credentials(kid,secret)
     return key,kid,secret
 
-def test_secret_encrypted_and_never_in_status(creds):
+def test_secret_never_in_status(creds):
     key,kid,secret=creds
-    assert secret.encode() not in auth._api_creds_file().read_bytes()
     assert secret not in json.dumps(auth.credentials_status_all())
     assert auth.get_api_creds()['keyId']==kid
     auth.clear_credentials()
     assert not auth.credentials_present()
+
+# Encryption at rest needs DPAPI (Windows) or an OS keychain (macOS). Linux CI
+# runners have neither, and there the app stores the secret chmod 600 and says
+# so in credentials_status().keyStoredUnencrypted — so this cannot pass there,
+# and failing would only teach CI to be ignored.
+@pytest.mark.skipif(not (auth._dpapi_available() or auth._keyring_available()),
+                    reason="no DPAPI or OS keychain on this machine")
+def test_secret_encrypted_at_rest(creds):
+    key,kid,secret=creds
+    assert secret.encode() not in auth._api_creds_file().read_bytes()
 
 def test_us_signature(creds):
     key,kid,_=creds
