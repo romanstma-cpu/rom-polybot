@@ -302,6 +302,21 @@ def paired_sides(asset: dict) -> tuple[str, float, float]:
     return "down", down_edge, up_edge
 
 
+def model_price_ceiling_cents(asset: dict, side: str, cfg: dict) -> Optional[int]:
+    """Highest whole-cent price at which the model's side still clears the
+    minimum net edge after the taker fee, or None when no price does."""
+    mp = asset.get("modelProb")
+    if mp is None or side not in ("up", "down"):
+        return None
+    p_side = float(mp) if side == "up" else 1.0 - float(mp)
+    min_e = float(cfg.get("crypto15m_model_min_edge_cents", 2.0) or 0.0)
+    fs, at = asset.get("feeSchedule"), crypto15m.asset_fee_at(asset)
+    for cents in range(min(99, int(p_side * 100.0)), 0, -1):
+        if p_side * 100.0 - cents - crypto15m._fee_cents(cents, fs, at) >= min_e:
+            return cents
+    return None
+
+
 def should_enter(asset: dict, cfg: dict, *, has_open: bool, open_count: int) -> tuple[bool, str]:
     if not cfg.get("crypto15m_enabled"):
         return False, "disabled"
@@ -765,6 +780,23 @@ async def _open_entry(a: dict, cfg: dict, env: str, balance_usd: float) -> Optio
     elif style != "maker" and real_ask and 1 <= real_ask <= 99:
         markup = max(0, int(round(crypto15m._const(cfg, "entry_diff") * 100)))
         limit_cents = min(max_cents, real_ask + markup)
+
+    if mode == "model":
+        # The entry decision priced the edge at the snapshot's ask; the order
+        # goes out at the live ask plus the slippage allowance. Cap it at the
+        # highest price that still leaves the configured minimum edge, and
+        # skip when even the live ask no longer does.
+        ceiling = model_price_ceiling_cents(a, side, cfg)
+        live_ask = real_ask if real_ask and 1 <= real_ask <= 99 else int(
+            math.ceil(entry_cost * 100 - 1e-9))
+        if ceiling is None or ceiling < live_ask:
+            _skip_entry(
+                f"edge gone at the live ask {live_ask}c (the minimum edge now "
+                f"needs {ceiling if ceiling else 0}c or less)",
+                exit_reason="edge_gone",
+            )
+            return None
+        limit_cents = min(limit_cents, ceiling)
 
     if limit_cents > max_cents:
         _skip_entry(

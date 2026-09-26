@@ -1429,6 +1429,7 @@ const C15_SKIP_LABELS: Record<string, { label: string; tip: string }> = {
   above_cap: { label: 'above cap', tip: 'Favorite was priced above your Skip-above cap — skipped (too expensive to enter).' },
   no_liquidity: { label: 'no fill', tip: 'Taker crossed but found no resting liquidity at/under your price — 0 fill. Enter earlier (wider window) or use maker.' },
   favorite_flipped: { label: 'flipped', tip: 'Favorite fell below your Favorite≥ floor before the order landed — skipped.' },
+  edge_gone: { label: 'edge gone', tip: 'The live ask had risen past the highest price that still leaves your minimum model edge — skipped instead of buying with no edge.' },
   unfilled_expired: { label: 'expired', tip: "Order didn't fill before the window closed." },
   stop_loss: { label: 'stopped', tip: 'Stop-loss sold to flatten the position.' },
   take_profit: { label: 'took profit', tip: 'Take-profit cashed out — sold the position into the book at your target price.' },
