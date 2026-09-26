@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import math
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import backtest as bt
 import crypto15m
+import crypto15m_evidence
 import crypto15m_trader
 import db as dbmod
 
@@ -63,6 +64,7 @@ def tick_to_asset(row: dict, cfg: dict, close_iso: str) -> dict:
     up_ask = row.get("up_ask")
     if up_ask is None and fav == "up" and row.get("ws_ask") is not None:
         up_ask = yes_ask
+    model_prob, edge_net = _reprice_model(row, cfg, ml, up_ask, no_ask)
     out = {
         "asset": row.get("asset"), "ticker": row.get("ticker"),
         "series": f"{row.get('asset')}-updown", "hasMarket": True,
@@ -70,8 +72,8 @@ def tick_to_asset(row: dict, cfg: dict, close_iso: str) -> dict:
         "favorite": fav, "favoritePrice": fav_price, "entryCost": entry_cost,
         "minsLeft": float(ml) if ml is not None else None,
         "inWindow": in_window, "signal": signal, "hourUtc": hour,
-        "modelProb": row.get("model_prob"),
-        "edgeNetCents": row.get("edge_net_cents"),
+        "modelProb": model_prob,
+        "edgeNetCents": edge_net,
         "spotLive": ("rtds-ws" in src) or ("coinbase-ws" in src),
         "upAsk": up_ask, "downAsk": no_ask,
         "yesBid": yes_bid, "yesAsk": yes_ask,
@@ -98,6 +100,34 @@ def tick_to_asset(row: dict, cfg: dict, close_iso: str) -> dict:
     }
     crypto15m.derive_script_fields(out, crypto15m._interval(cfg))
     return out
+
+
+def _num(v) -> Optional[float]:
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
+
+
+def _reprice_model(row: dict, cfg: dict, mins_left, up_ask, no_ask):
+    """The model probability and edge this config would have seen.
+
+    A tick stores the probability of whichever model was live when it was
+    recorded. Replaying that number would score every tail setting on the old
+    model's calls, so the tick is re-priced from its recorded spot, strike,
+    volatility and time left. A tick missing any of those keeps its recorded
+    values.
+    """
+    strike = row.get("strike") if row.get("strike") is not None else row.get("open_spot")
+    prob = crypto15m.model_up_prob(
+        _num(row.get("spot")), _num(strike), _num(row.get("sigma1m")),
+        _num(mins_left), crypto15m.model_tail_dof(cfg))
+    if prob is None:
+        return row.get("model_prob"), row.get("edge_net_cents")
+    at = crypto15m.asset_fee_at({"observedAt": row.get("observed_at")})
+    return prob, crypto15m.model_edge_net_cents(
+        prob, _num(up_ask), _num(no_ask), None, at)
 
 
 def _tick_epoch(row: dict) -> Optional[float]:
@@ -163,29 +193,58 @@ def _missing_rule_fields(cfg: dict) -> list[str]:
     return sorted(fields - _DERIVABLE)
 
 
-def _tp_exit_pnl_ct(
+def _side_bid(row: dict, side: str) -> Optional[float]:
+    if side == "up":
+        v = row.get("yes_bid")
+    else:
+        ya = row.get("yes_ask")
+        v = (1.0 - float(ya)) if ya is not None else None
+    v = _num(v)
+    return v if v is not None and 0.0 < v < 1.0 else None
+
+
+def _exit_pnl_ct(
     ticks: list[dict], entry_idx: int, side: str, cost: float, cfg: dict
-) -> Optional[float]:
-    tp_price = crypto15m._const(cfg, "take_profit")
-    tpp = crypto15m._const(cfg, "take_profit_pct")
-    if tp_price <= 0 and tpp <= 0:
-        return None
-    entry_fee = bt.us_fee_per_contract(cost, bt.tick_epoch(ticks[entry_idx]))
-    for t2 in ticks[entry_idx + 1:]:
-        if side == "up":
-            bid = t2.get("yes_bid")
-        else:
-            ya = t2.get("yes_ask")
-            bid = (1.0 - float(ya)) if ya is not None else None
-        if bid is None:
+) -> Optional[tuple[float, str]]:
+    """Per-contract P&L and reason of the first exit live trading would take.
+
+    Mirrors crypto15m_trader._manage_position tick by tick. A sell-into-
+    strength order rests from the first check after the fill and, while it
+    rests, nothing else is checked. Otherwise take-profit (price target, then
+    percent above cost, on the best bid) comes before the stop-loss (the side's
+    mid below the exit threshold, or its percent loss past the stop), which
+    sells at the bid, or two cents under the mid when there is no bid. None
+    means the position is held to settlement.
+    """
+    at_entry = bt.tick_epoch(ticks[entry_idx])
+    entry_fee = bt.us_fee_per_contract(cost, at_entry)
+
+    def sell(price: float, row: dict, reason: str) -> tuple[float, str]:
+        exit_fee = bt.us_fee_per_contract(price, bt.tick_epoch(row))
+        return (price - cost) - entry_fee - exit_fee, reason
+
+    held = {"status": "filled", "filled_contracts": 1, "cost_usd": cost,
+            "avg_entry_cents": cost * 100.0}
+    strength = crypto15m_trader.strength_exit_cents(held, cfg)
+    stop_mid = crypto15m._const(cfg, "exit_threshold")
+    stop_pct = crypto15m_trader._clamp01(crypto15m._const(cfg, "stop_loss_pct"))
+    for row in ticks[entry_idx + 1:]:
+        bid = _side_bid(row, side)
+        bid_c = int(round(bid * 100)) if bid is not None else None
+        if strength is not None:
+            if bid_c is not None and bid_c >= strength:
+                return sell(strength / 100.0, row, "sell_strength")
             continue
-        bid = float(bid)
-        if not (0.0 < bid < 1.0):
+        if (crypto15m_trader.should_take_profit(held, bid_c, cfg)
+                or crypto15m_trader.should_take_profit_pct(held, bid_c, cfg)):
+            return sell(bid, row, "take_profit")
+        up = _num(row.get("up_prob"))
+        if up is None:
             continue
-        hit = (tp_price > 0 and bid >= tp_price) or (tpp > 0 and bid >= cost * (1.0 + tpp))
-        if hit:
-            exit_fee = bt.us_fee_per_contract(bid, bt.tick_epoch(t2))
-            return (bid - cost) - entry_fee - exit_fee
+        mid = up if side == "up" else 1.0 - up
+        if mid < stop_mid or (stop_pct > 0 and (cost - mid) / cost >= stop_pct):
+            price = bid if bid is not None else max(0.01, mid - 0.02)
+            return sell(price, row, "stop_loss")
     return None
 
 
@@ -304,11 +363,10 @@ def _simulate(
             won = up_won if side == "up" else (1 - up_won)
             pnl_ct = (1.0 - cost - fee) if won else (-cost - fee)
             exit_reason = "settlement"
-            tp_ct = _tp_exit_pnl_ct(ticks, fill_idx, side, cost, eff)
-            if tp_ct is not None:
-                pnl_ct = tp_ct
-                won = tp_ct > 0
-                exit_reason = "take_profit"
+            early = _exit_pnl_ct(ticks, fill_idx, side, cost, eff)
+            if early is not None:
+                pnl_ct, exit_reason = early
+                won = pnl_ct > 0
             trades.append({
                 "ticker": ticker, "asset": asset["asset"], "side": side,
                 "costCents": round(cost * 100, 1),
@@ -388,7 +446,7 @@ def replay(cfg: dict, *, env: str = "mainnet", since_days: int = 60) -> dict:
             "missed hedge leaves a naked single-side position."
         )
     caveats += [
-        "Single-side take-profit exits (price target + percent-above-cost) ARE simulated at the recorded bid (entry + exit taker fees charged); stop-loss and paired-leg take-profit exits are NOT — those still hold to settlement.",
+        "Single-side exits ARE simulated in the live engine's order: a sell-into-strength order at its target, else take-profit (price or percent) at the recorded bid, else stop-loss (mid under the exit threshold, or percent loss) at the recorded bid, with entry and exit taker fees charged. Exits assume the sell fills at that price; live, a stop in a falling book can fill lower. Paired legs still hold to settlement.",
         f"Ticks are ~4-25s apart over {since_days} days of app uptime only; the gate could have fired between ticks.",
         "In-sample: any threshold tuned against this panel is fit to the past. Watch it run detection-only before arming.",
         "Live model-calibration auto-pause is NOT simulated — live trading can pause where this replay keeps trading.",
@@ -406,8 +464,10 @@ def replay(cfg: dict, *, env: str = "mainnet", since_days: int = 60) -> dict:
             "days — the recorder only captures the interval selected on the "
             "Crypto tab, so switch to it there and let data accumulate first."
         ))
+    gate = gate_verdict(trades, contracts)
     out = _summarize(trades, contracts, n_windows, caveats)
     out["interval"] = interval
+    out["gate"] = gate
     out["fillModel"] = {
         "minQuoteStableSecs": stable_secs,
         "latencySecs": latency_secs,
@@ -415,6 +475,20 @@ def replay(cfg: dict, *, env: str = "mainnet", since_days: int = 60) -> dict:
         "latencyMisses": latency_misses,
     }
     return out
+
+
+def gate_verdict(trades: list[dict], contracts: int, *, now: Optional[datetime] = None) -> dict:
+    """What the live evidence gate would say about these replayed trades.
+
+    The gate looks only at the most recent EVIDENCE_DAYS, whatever window the
+    backtest covers, and scores one contract per trade.
+    """
+    now = now or datetime.now(timezone.utc)
+    cutoff = (now - timedelta(days=crypto15m_evidence.EVIDENCE_DAYS)).strftime("%Y-%m-%d %H:%M:%S")
+    per_contract = max(1, int(contracts))
+    recent = [dict(t, pnlUsd=float(t["pnlUsd"]) / per_contract)
+              for t in trades if str(t.get("at") or "") >= cutoff]
+    return crypto15m_evidence.assess(recent)
 
 
 def _bucketize(trades: list[dict]) -> dict:

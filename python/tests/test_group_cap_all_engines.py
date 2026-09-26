@@ -196,6 +196,8 @@ def c15_cfg(**over):
         "network": ENV, "crypto15m_enabled": True, "crypto15m_order_size": 1,
         "crypto15m_entry_style": "taker", "crypto15m_sizing_mode": "balance_pct",
         "crypto15m_balance_pct": 1.0, "max_group_exposure_fraction": 0.10,
+        # Group-cap mechanics only; the evidence gate is tested on its own.
+        "crypto15m_require_proven_edge": False,
     })
     c.update(over)
     return c

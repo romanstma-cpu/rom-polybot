@@ -141,6 +141,10 @@ export interface TraderConfig {
 
   crypto15mModelMinProb?: number;
   crypto15mModelMinEdgeCents?: number;
+  /** Student-t degrees of freedom for the model's tails; 0 = normal curve. */
+  crypto15mModelTailDof?: number;
+  /** Live crypto entries wait until replaying the settings over recorded windows shows a net edge. */
+  crypto15mRequireProvenEdge?: boolean;
   crypto15mModelFinalMinute?: boolean;
   crypto15mModelAutopause?: boolean;
   crypto15mModelMaxBookGapCents?: number;
@@ -585,6 +589,23 @@ export interface Crypto15mSizing {
   note: string;
 }
 
+export interface Crypto15mEvidence {
+  qualified: boolean;
+  reason: string;
+  n?: number;
+  days?: number;
+  sinceDays?: number;
+  minTrades?: number;
+  minDays?: number;
+  winRate?: number | null;
+  evCents?: number | null;
+  conservativeEvCents?: number | null;
+  lowerEvCents?: number | null;
+  halvesPositive?: boolean | null;
+  windows?: number;
+  evaluatedAt?: number;
+}
+
 export interface Crypto15mStatus {
   enabled: boolean;
   authed: boolean;
@@ -592,7 +613,13 @@ export interface Crypto15mStatus {
   haltReason?: string;
   blockReasons?: Record<string, string>;
   byStrategy?: { strategy: string; n: number; wins: number; losses: number; pnl_usd: number; fees_usd: number }[];
-  modelCalibration?: { ok: boolean; n: number; rate: number | null; lb: number | null };
+  modelCalibration?: {
+    ok: boolean; n: number; rate: number | null; lb: number | null;
+    pricedN?: number; breakEven?: number | null; reason?: string;
+  };
+  evidenceRequired?: boolean;
+  /** Latest replay verdict for the current settings; null while the first replay runs. */
+  evidence?: Crypto15mEvidence | null;
   orderSize: number;
   maxConcurrent: number;
   sizing: Crypto15mSizing;
@@ -940,6 +967,8 @@ export interface Crypto15mBacktest {
   trades: { ticker: string; asset: string; side: string; costCents: number; minsLeft: number | null; won: boolean; pnlUsd: number; at: string }[];
   caveats: string[];
   interval?: '5m' | '15m' | 'hourly';
+  /** Crypto only: the live evidence gate's verdict on the last 14 days of these trades. */
+  gate?: Crypto15mEvidence;
 }
 
 export interface UserScriptStats {

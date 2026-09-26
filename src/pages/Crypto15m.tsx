@@ -187,12 +187,38 @@ export function Crypto15mPage() {
         )}
         {enabled && status?.modelCalibration && !status.modelCalibration.ok && (
           <div className="mt-2 rounded-lg border border-rom-loss/40 bg-rom-loss/10 px-3 py-2 text-[11px] leading-relaxed text-rom-lossText">
-            ⛔ <span className="font-semibold">Model calibration degraded</span> — high-confidence
-            calls hit {Math.round((status.modelCalibration.rate ?? 0) * 100)}% over the last{' '}
-            {status.modelCalibration.n} windows, and the statistical floor on that record
-            ({Math.round((status.modelCalibration.lb ?? 0) * 100)}%) is below the bar the sniper
-            needs to stay armed. Model entries are auto-paused and resume as newer windows
-            restore calibration.
+            ⛔ <span className="font-semibold">Model calibration degraded</span> —{' '}
+            {status.modelCalibration.reason ? (
+              <>{status.modelCalibration.reason}. </>
+            ) : (
+              <>
+                high-confidence calls hit {Math.round((status.modelCalibration.rate ?? 0) * 100)}% over the last{' '}
+                {status.modelCalibration.n} windows, and the statistical floor on that record
+                ({Math.round((status.modelCalibration.lb ?? 0) * 100)}%) is below the bar the sniper
+                needs to stay armed.{' '}
+              </>
+            )}
+            Model entries are auto-paused and resume as newer windows restore calibration.
+          </div>
+        )}
+        {enabled && status?.evidenceRequired && !status.evidence?.qualified && (
+          <div className="mt-2 rounded-lg border border-rom-warn/40 bg-rom-warn/10 px-3 py-2 text-[11px] leading-relaxed text-rom-warn">
+            <span className="font-semibold">Live entries are waiting for proof</span> —{' '}
+            {status.evidence ? status.evidence.reason : 'checking your recorded windows'}.
+            The recorder keeps logging every window, and entries start on their own once
+            replaying these settings over the last {status.evidence?.sinceDays ?? 14} days
+            shows a profit after fees. To trade without that proof, turn off Require proven
+            edge in the advanced risk settings.
+          </div>
+        )}
+        {enabled && status?.evidenceRequired && status.evidence?.qualified && (
+          <div className="mt-2 text-[11px] text-rom-win">
+            Edge {status.evidence.reason}.
+          </div>
+        )}
+        {!enabled && status?.evidenceRequired && status.evidence && (
+          <div className="mt-2 text-[11px] text-rom-dim">
+            Evidence for these settings: {status.evidence.reason}.
           </div>
         )}
         {enabled && (status?.byStrategy?.length ?? 0) > 0 && (
@@ -792,8 +818,14 @@ function StrategySettings({
               onCommit={(v) => void update({ crypto15mModelMaxBookGapCents: v })}
             />
             <SelectField
+              label="Tail model" value={String(config?.crypto15mModelTailDof ?? 5)}
+              options={[['5', 'Fat tails (recommended)'], ['3', 'Very fat tails'], ['0', 'Normal curve (legacy)']]}
+              hint="How often the model expects big sudden moves. Crypto jumps far more often than a normal curve predicts, and near-certain entries lose most when that happens. Fat tails make the model less sure far from the open price, so it buys fewer 97-99¢ contracts."
+              onCommit={(v) => void update({ crypto15mModelTailDof: Number(v) })}
+            />
+            <SelectField
               label="Final-minute strikes" value={(config?.crypto15mModelFinalMinute ?? true) ? 'on' : 'off'}
-              options={[['on', 'On (3-sigma gate)'], ['off', 'Off']]}
+              options={[['on', 'On (99.85% gate)'], ['off', 'Off']]}
               hint="Allow entries inside the last 60s when the model is near-certain, the spot feed is live, and there's order runway."
               onCommit={(v) => void update({ crypto15mModelFinalMinute: v === 'on' })}
             />
@@ -898,6 +930,13 @@ function StrategySettings({
           value={num('crypto15mLifetimeLossLimitUsd', 0)}
           hint="Absolute-dollar version of the lifetime breaker. When > 0 it takes precedence over the % setting. 0 = use the %."
           onCommit={(v) => void update({ crypto15mLifetimeLossLimitUsd: Math.max(0, v) })}
+        />
+        <SelectField
+          label="Require proven edge"
+          value={(config?.crypto15mRequireProvenEdge ?? true) ? 'on' : 'off'}
+          options={[['on', 'On (recommended)'], ['off', 'Off']]}
+          hint="Live entries wait until replaying these exact settings over your last 14 days of recorded windows shows a profit after fees: at least 50 trades over 5 days, still profitable with the loss rate at the top of its likely range, and in both halves of the period. Off trades on the settings alone."
+          onCommit={(v) => void update({ crypto15mRequireProvenEdge: v === 'on' })}
         />
         <SelectField
           label="Entry style" value={entryStyle}
@@ -1390,6 +1429,7 @@ const C15_SKIP_LABELS: Record<string, { label: string; tip: string }> = {
   above_cap: { label: 'above cap', tip: 'Favorite was priced above your Skip-above cap — skipped (too expensive to enter).' },
   no_liquidity: { label: 'no fill', tip: 'Taker crossed but found no resting liquidity at/under your price — 0 fill. Enter earlier (wider window) or use maker.' },
   favorite_flipped: { label: 'flipped', tip: 'Favorite fell below your Favorite≥ floor before the order landed — skipped.' },
+  edge_gone: { label: 'edge gone', tip: 'The live ask had risen past the highest price that still leaves your minimum model edge — skipped instead of buying with no edge.' },
   unfilled_expired: { label: 'expired', tip: "Order didn't fill before the window closed." },
   stop_loss: { label: 'stopped', tip: 'Stop-loss sold to flatten the position.' },
   take_profit: { label: 'took profit', tip: 'Take-profit cashed out — sold the position into the book at your target price.' },

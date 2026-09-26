@@ -3,6 +3,53 @@
 Assumptions made while working without confirmation. Each entry states the
 ambiguity, the choice, and why it is the safest reasonable option.
 
+## 2026-09-26 — the crypto engine trades live only on replayed evidence of a net edge
+
+The main engine will not trade a signal group live until held-out settled
+outcomes show a profit after costs. The crypto engine had no equivalent:
+switched on, it placed real orders for whatever its settings said. Its default
+buys favorites at 95-98c, where a strategy can win most windows and still
+lose, because one miss costs what twenty to thirty wins earn.
+
+Live crypto entries now wait until replaying the configured strategy over the
+last 14 days of recorded windows (the Crypto tab's own backtest, one contract
+per window, plus 1c slippage per fill) shows at least 50 trades over 5 days,
+positive expected profit with the loss rate at its 95% upper bound, a positive
+5th-percentile day-block bootstrap, and profit in both halves. The loss-rate
+test is the one that matters for near-certain entries: 60 wins in 60 at 96c is
+consistent with a 4% loss rate, which loses money, and a bootstrap cannot
+resample losses that did not happen. The thresholds mirror the main engine's
+(`signal_calibration.economic_check`: 40 trades, 7 days, bootstrap lower bound,
+both halves) with the loss-rate bound added. They were chosen, not fitted:
+there is no data in this repository to fit them to.
+
+On by default, because the request was profitability and an unproven strategy
+is not that. The recorder logs every window whether or not the engine trades,
+so evidence builds without risk, and the Crypto page says why entries wait.
+`crypto15m_require_proven_edge = false` restores the old behaviour. Parlay
+schedules are exempt; their generator already chose each hour on held-out
+windows.
+
+Same change, two related choices:
+
+- **Model tails.** The terminal-spot model used a normal curve. Minute-scale
+  crypto returns are far heavier-tailed, and the model is used exactly where
+  that matters: buying at 97-99.9c. It now uses a Student-t rescaled to the
+  same variance, 5 degrees of freedom by default (excess kurtosis 6, inside
+  the range usually measured for minute crypto returns). At equal variance the
+  t is more peaked near the strike and doubts the far tail; the two cross near
+  97%, the model-mode entry threshold, so every model entry sees the more
+  cautious number. Three sigma out the normal curve says 99.87%, the t 99.41%.
+  0 keeps the normal curve. The replay re-prices each recorded tick with the
+  setting under test, so the backtest can compare them on the same windows.
+- **Calibration guard against price.** The auto-pause compared recent
+  high-confidence calls with a fixed 85% hit-rate floor. At 98.5c a call, 38
+  of 40 passes that floor and loses money. The same calls are now also scored
+  against what their side cost at the time (ask plus fee): pause when the
+  one-sigma upper bound of the hit rate is below that break-even, resume when
+  the hit rate itself clears it. With 40 recent windows this is a drift
+  alarm, not proof in either direction; the evidence gate is the real check.
+
 ## 2026-09-11 — count crypto15m exposure in the group cap, but do not yet gate that engine
 
 UPGRADE-5 is titled "account-wide risk controls" and opens by saying the

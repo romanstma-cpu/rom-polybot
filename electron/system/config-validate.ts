@@ -74,7 +74,7 @@ const FIELD_TYPES: Readonly<Record<string, FieldType>> = {
   crypto15mDailyLossLimit: 'number', crypto15mLifetimeLossLimitPct: 'number',
   crypto15mLifetimeLossLimitUsd: 'number', crypto15mTakeProfitTotal: 'number',
   crypto15mDirectionMode: 'string-enum',
-  crypto15mModelMinProb: 'number', crypto15mModelMinEdgeCents: 'number', crypto15mModelFinalMinute: 'boolean',
+  crypto15mModelMinProb: 'number', crypto15mModelMinEdgeCents: 'number', crypto15mModelTailDof: 'number', crypto15mRequireProvenEdge: 'boolean', crypto15mModelFinalMinute: 'boolean',
   crypto15mModelAutopause: 'boolean', crypto15mModelMaxBookGapCents: 'number',
   crypto15mSpotWs: 'boolean', crypto15mRtdsWs: 'boolean',
   crypto15mPairedMode: 'boolean', crypto15mPairedMaxCombinedCents: 'number',

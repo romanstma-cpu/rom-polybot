@@ -4,7 +4,7 @@ import {
   Area, AreaChart, Bar, BarChart, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
 import { C15_PRESET_CORE } from '@shared/c15Presets';
-import type { CollectionStats, Crypto15mBacktest, TraderConfig } from '@shared/types';
+import type { CollectionStats, Crypto15mBacktest, Crypto15mEvidence, TraderConfig } from '@shared/types';
 import { Card, Field, Page, Switch } from '../components/common';
 import { useApp } from '../state/AppStateProvider';
 import { cls, fmtUsd } from '../utils/format';
@@ -19,6 +19,17 @@ const C15_STRATS: { id: string; name: string; patch: Partial<TraderConfig> }[] =
       ...C15_PRESET_CORE.sniper,
 
       crypto15mModelMinProb: 0.97, crypto15mTimeDelayMin: 5, crypto15mEntryMax: 0.97,
+    },
+  },
+  {
+    // Same preset on the old normal-curve model, so the effect of the
+    // fat-tailed default shows up on your own windows.
+    id: 'sniper-normal', name: 'Settlement Sniper (old normal-curve model)',
+    patch: {
+      ...C15_PRESET_CORE.sniper,
+
+      crypto15mModelMinProb: 0.97, crypto15mTimeDelayMin: 5, crypto15mEntryMax: 0.97,
+      crypto15mModelTailDof: 0,
     },
   },
   {
@@ -42,6 +53,8 @@ const C15_STRATS: { id: string; name: string; patch: Partial<TraderConfig> }[] =
 ];
 
 const WINDOWS = [7, 14, 30, 60];
+
+type CompareRow = { id: string; name: string; res: Crypto15mBacktest | null; err?: string };
 
 export function BacktestPage() {
   const [engine, setEngine] = useState<Engine>('main');
@@ -136,6 +149,30 @@ export function BacktestPage() {
     }
   };
 
+  const [compare, setCompare] = useState<CompareRow[] | null>(null);
+  const [comparing, setComparing] = useState(false);
+  const compareGeneration = useRef(0);
+  const runCompare = async () => {
+    const generation = ++compareGeneration.current;
+    setComparing(true);
+    const rows: CompareRow[] = [];
+    setCompare([]);
+    // One at a time: each replay reads the whole recorded window.
+    for (const st of C15_STRATS) {
+      let row: CompareRow;
+      try {
+        const r = await window.rom.crypto15m.backtest({ sinceDays: 14, config: st.patch });
+        row = { id: st.id, name: st.name, res: r, err: r ? undefined : 'Engine not running' };
+      } catch (e: any) {
+        row = { id: st.id, name: st.name, res: null, err: e?.message || String(e) };
+      }
+      if (generation !== compareGeneration.current) return;
+      rows.push(row);
+      setCompare([...rows]);
+    }
+    if (generation === compareGeneration.current) setComparing(false);
+  };
+
   const isCryptoProfile = (scope?: string) => (scope ?? 'main') === 'crypto';
   const isMainProfile = (scope?: string) => (scope ?? 'main') === 'main';
 
@@ -219,6 +256,57 @@ export function BacktestPage() {
         </div>
         {err && <p className="mt-2 text-xs text-rom-lossText">{err}</p>}
       </Card>
+
+      {engine === 'crypto15m' && (
+        <div className="mt-4">
+          <Card header={<div className="text-xs uppercase tracking-wider text-rom-muted">Which settings are proven?</div>}>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <p className="max-w-2xl text-[11px] leading-relaxed text-rom-dim">
+                Replays your current settings and each preset over the last 14 days of your recorded
+                windows and asks the live evidence gate about each one: at least 50 trades over 5 days,
+                still profitable with the loss rate at the top of its likely range, and in both halves of
+                the period. Picking the best of several on the same data flatters the winner, so once you
+                choose, the gate keeps re-checking it on new windows every 30 minutes.
+              </p>
+              <button
+                onClick={() => void runCompare()}
+                disabled={comparing}
+                className="inline-flex shrink-0 items-center gap-2 rounded-md border border-rom-purple/40 bg-rom-purple/10 px-3 py-1.5 text-xs text-rom-purple transition-colors hover:bg-rom-purple/20 disabled:opacity-50"
+              >
+                <FlaskConical className={cls('h-3.5 w-3.5', comparing && 'animate-pulse')} />
+                {comparing ? 'Comparing…' : 'Compare presets on my data'}
+              </button>
+            </div>
+            {compare && compare.length > 0 && (
+              <table className="mt-3 w-full text-[11px]">
+                <thead><tr className="text-left text-rom-dim">
+                  <th className="py-1 pr-3 font-normal">Settings</th>
+                  <th className="py-1 pr-3 font-normal">Trades</th>
+                  <th className="py-1 pr-3 font-normal">Per contract</th>
+                  <th className="py-1 font-normal">Live gate</th>
+                </tr></thead>
+                <tbody>
+                  {compare.map((row) => (
+                    <tr key={row.id} className="border-t border-rom-border/50 align-top">
+                      <td className="py-1.5 pr-3 text-white">{row.name}</td>
+                      <td className="py-1.5 pr-3 font-mono text-rom-dim">{row.res ? row.res.n : '—'}</td>
+                      <td className={cls('py-1.5 pr-3 font-mono',
+                        !row.res?.n ? 'text-rom-dim' : row.res.netEvCentsPerContract >= 0 ? 'text-rom-win' : 'text-rom-lossText')}>
+                        {row.res?.n ? `${row.res.netEvCentsPerContract.toFixed(2)}¢` : '—'}
+                      </td>
+                      <td className={cls('py-1.5', row.res?.gate?.qualified ? 'text-rom-win' : 'text-rom-dim')}>
+                        {row.err ?? (row.res?.gate
+                          ? (row.res.gate.qualified ? `Proven — ${row.res.gate.reason.replace(/^proven /, '')}` : row.res.gate.reason)
+                          : 'update the app backend to see the verdict')}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </Card>
+        </div>
+      )}
 
       <div className="mt-4">
         <Card header={<div className="text-xs uppercase tracking-wider text-rom-muted">Data collection</div>}>
@@ -377,6 +465,7 @@ export function BacktestPage() {
             <Stat label="Max drawdown" value={fmtUsd(res.maxDrawdownUsd)} tone="bad" />
             <Stat label={res.mode === 'portfolio' ? 'Closed events' : 'Days traded'} value={`${res.mode === 'portfolio' ? res.independentEvents : res.byDay.length}`} />
           </div>
+          {engine === 'crypto15m' && res.gate && <GateVerdict gate={res.gate} />}
           {res.mode === 'portfolio' && <Card className="mt-4">
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               <Stat label="Cash" value={fmtUsd(res.cashUsd ?? 0)} />
@@ -464,6 +553,18 @@ export function BacktestPage() {
   );
 }
 
+
+function GateVerdict({ gate }: { gate: Crypto15mEvidence }) {
+  return (
+    <p className={cls(
+      'mt-3 rounded-lg border px-3 py-2 text-[11px] leading-relaxed',
+      gate.qualified ? 'border-rom-win/30 bg-rom-win/5 text-rom-win' : 'border-rom-warn/30 bg-rom-warn/5 text-rom-warn',
+    )}>
+      <span className="font-semibold">Live evidence gate (last 14 days): </span>
+      {gate.qualified ? `would trade these settings — ${gate.reason}.` : `would not trade these settings yet — ${gate.reason}.`}
+    </p>
+  );
+}
 
 function Chips({ options, value, onPick }: {
   options: [string, string][]; value: string; onPick: (v: string) => void;

@@ -35,6 +35,9 @@ def cfg():
     c["crypto15m_enabled"] = True
     c["crypto15m_order_size"] = 1
     c["crypto15m_entry_style"] = "taker"
+    # These tests exercise order placement; the evidence gate has its own
+    # suite in test_crypto15m_edge.py.
+    c["crypto15m_require_proven_edge"] = False
     return c
 
 
@@ -1676,3 +1679,82 @@ def test_compute_entry_contracts_streak_respects_risk_caps(cfg):
     n = ct.compute_entry_contracts(
         cfg, entry_limit_cents=50, balance_usd=100, order_size=8, streak_mult=4.0)
     assert n == 10
+
+
+def test_live_entries_wait_for_proven_edge(fresh_db, env_net, cfg, monkeypatch):
+    """With the gate on, a signal alone places nothing until the replayed
+    evidence qualifies, and the reason is shown for the asset."""
+    import crypto15m_evidence as ev
+    ev._verdicts.clear()
+    ev._refreshing.clear()
+    cfg["crypto15m_require_proven_edge"] = True
+    monkeypatch.setattr(ev, "ensure_fresh", lambda *_a: None)
+    monkeypatch.setattr(crypto15m, "snapshot", _stub_snapshot([signal_asset()]))
+    calls = _capture_orders(monkeypatch)
+
+    run_async(ct.run_tick(cfg, authed=True))
+    assert calls == []
+    assert "no proven edge" in ct._block_reasons["BTC"]
+
+    ev._verdicts[("mainnet", ev.fingerprint(cfg))] = {
+        "qualified": False, "reason": "not proven: later half lost", "evaluatedAt": 0}
+    run_async(ct.run_tick(cfg, authed=True))
+    assert calls == [] and "later half lost" in ct._block_reasons["BTC"]
+
+    ev._verdicts[("mainnet", ev.fingerprint(cfg))]["qualified"] = True
+    run_async(ct.run_tick(cfg, authed=True))
+    assert len(calls) == 1
+    ev._verdicts.clear()
+
+
+def _model_asset(**over):
+    a = signal_asset(entry_cost=0.90)
+    a.update({"modelProb": 0.99, "upAsk": 0.90, "downAsk": 0.12,
+              "spotLive": True, "feeSchedule": None})
+    a.update(over)
+    return a
+
+
+def _model_entry(cfg, monkeypatch, live_ask):
+    cfg["crypto15m_direction_mode"] = "model"
+    cfg["crypto15m_model_autopause"] = False
+    cfg["crypto15m_entry_max"] = 0.98
+    monkeypatch.setattr(crypto15m, "snapshot", _stub_snapshot([_model_asset()]))
+    calls = _capture_orders(monkeypatch)
+
+    async def _quote(_t, _s):
+        return {"bid_cents": live_ask - 2, "ask_cents": live_ask}
+
+    monkeypatch.setattr(polymarket_api, "get_quote", _quote)
+    run_async(ct.run_tick(cfg, authed=True))
+    return calls
+
+
+def test_model_price_ceiling_keeps_the_minimum_edge_after_fees():
+    cfg = merge_with_defaults({"crypto15mModelMinEdgeCents": 2.0})
+    # 99c model: 96c leaves 99 - 96 - ~0.3c fee >= 2; 97c leaves ~1.8c.
+    assert ct.model_price_ceiling_cents(_model_asset(), "up", cfg) == 96
+    assert ct.model_price_ceiling_cents(_model_asset(modelProb=0.01), "down", cfg) == 96
+    # At a coin flip the fee is ~1.7c, so 46c is the last price with 2c left.
+    assert ct.model_price_ceiling_cents(_model_asset(modelProb=0.5), "up", cfg) == 46
+    assert ct.model_price_ceiling_cents(_model_asset(modelProb=None), "up", cfg) is None
+
+
+def test_model_entry_pays_at_most_what_keeps_the_edge(fresh_db, env_net, cfg, monkeypatch):
+    """The snapshot saw 90c. The live ask is 96c, and ask + 2c slippage
+    would be 98c, where a 99c model has 1c left. The order is capped at 96c."""
+    calls = _model_entry(cfg, monkeypatch, live_ask=96)
+    assert len(calls) == 1 and calls[0]["price_cents"] == 96
+
+
+def test_model_entry_keeps_the_full_allowance_when_edge_is_wide(fresh_db, env_net, cfg, monkeypatch):
+    calls = _model_entry(cfg, monkeypatch, live_ask=92)
+    assert len(calls) == 1 and calls[0]["price_cents"] == 94
+
+
+def test_model_entry_skips_when_the_live_ask_has_eaten_the_edge(fresh_db, env_net, cfg, monkeypatch):
+    calls = _model_entry(cfg, monkeypatch, live_ask=97)
+    assert calls == []
+    with db.get_db() as conn:
+        r = dict(conn.execute("SELECT * FROM crypto15m_positions WHERE asset='BTC'").fetchone())
+    assert r["status"] == "canceled" and r["exit_reason"] == "edge_gone"
