@@ -6,9 +6,10 @@ name: Build Installers
 # A push to `build` (or `main`) publishes each installer as an asset on a
 # per-run GitHub *prerelease*; release assets do not count against Actions
 # artifact storage and do not expire. Any other run — a pull request that
-# touches this file, or a manual dispatch — keeps the installers as workflow artifacts for a week
-# and publishes nothing, so a change to this pipeline can be tested before it
-# is trusted. This workflow does not wire up auto-update.
+# changes the pipeline or what gets packaged, or a manual dispatch — keeps the
+# installers as workflow artifacts for a week and publishes nothing, so such a
+# change can be tested before it is trusted. This workflow does not wire up
+# auto-update.
 #
 # The Windows installer used to be built by hand on a personal machine. Built
 # here, both platforms come from a tagged, reproducible run, which is also what
@@ -16,10 +17,17 @@ name: Build Installers
 on:
   push:
     branches: [main, build]
-  # A pull request that changes this file runs it as a dry run: both
-  # installers are built and tested, nothing is published.
+  # A pull request that changes this file, the dependencies, or the backend
+  # bundle runs it as a dry run: both installers are built and tested,
+  # nothing is published. (electron-builder's config lives in package.json.)
   pull_request:
-    paths: [".github/workflows/build-installers.yml"]
+    paths:
+      - ".github/workflows/build-installers.yml"
+      - "package.json"
+      - "package-lock.json"
+      - "python/requirements*.txt"
+      - "python/*.spec"
+      - "scripts/build-python.mjs"
   workflow_dispatch: {}
 
 # contents: write is required to create the release and upload installer assets.
