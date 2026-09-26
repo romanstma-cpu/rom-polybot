@@ -967,6 +967,8 @@ export interface Crypto15mBacktest {
   trades: { ticker: string; asset: string; side: string; costCents: number; minsLeft: number | null; won: boolean; pnlUsd: number; at: string }[];
   caveats: string[];
   interval?: '5m' | '15m' | 'hourly';
+  /** Crypto only: the live evidence gate's verdict on the last 14 days of these trades. */
+  gate?: Crypto15mEvidence;
 }
 
 export interface UserScriptStats {

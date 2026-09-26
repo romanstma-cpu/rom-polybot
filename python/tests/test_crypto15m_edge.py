@@ -417,3 +417,24 @@ def test_a_stop_with_no_bid_sells_two_cents_under_the_mid():
     t = _only_trade(_path((0.89, 0.88), (0.35, None)), _exit_cfg())
     assert t["exitReason"] == "stop_loss"
     assert t["pnlUsd"] == pytest.approx(0.33 - 0.90 - _fee(0.90) - _fee(0.33), abs=1e-4)
+
+
+def test_backtests_report_the_gates_verdict_on_the_last_14_days():
+    now = datetime(2026, 9, 26, tzinfo=timezone.utc)
+    old = [dict(t, pnlUsd=t["pnlUsd"] * 5) for t in
+           _trades("W" * 80, cost=0.70, start=now - timedelta(days=40))]
+    v = replay.gate_verdict(old, 5, now=now)
+    assert v["n"] == 0 and not v["qualified"]           # all older than 14 days
+    fresh = [dict(t, pnlUsd=t["pnlUsd"] * 5) for t in
+             _trades(("W" * 11 + "L") * 6, cost=0.70, start=now - timedelta(days=10))]
+    v = replay.gate_verdict(old + fresh, 5, now=now)
+    assert v["n"] == 72 and v["qualified"], v["reason"]
+    # Five-lot P&L is scored per contract, as the gate scores it.
+    assert v == ev.assess(_trades(("W" * 11 + "L") * 6, cost=0.70,
+                                  start=now - timedelta(days=10)))
+
+
+def test_the_backtest_payload_carries_the_verdict(fresh_db):
+    out = replay.replay(_favorite_cfg(), env="mainnet", since_days=60)
+    assert out["gate"]["qualified"] is False
+    assert "not enough evidence" in out["gate"]["reason"]

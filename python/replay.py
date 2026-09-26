@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import math
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import backtest as bt
 import crypto15m
+import crypto15m_evidence
 import crypto15m_trader
 import db as dbmod
 
@@ -463,8 +464,10 @@ def replay(cfg: dict, *, env: str = "mainnet", since_days: int = 60) -> dict:
             "days — the recorder only captures the interval selected on the "
             "Crypto tab, so switch to it there and let data accumulate first."
         ))
+    gate = gate_verdict(trades, contracts)
     out = _summarize(trades, contracts, n_windows, caveats)
     out["interval"] = interval
+    out["gate"] = gate
     out["fillModel"] = {
         "minQuoteStableSecs": stable_secs,
         "latencySecs": latency_secs,
@@ -472,6 +475,20 @@ def replay(cfg: dict, *, env: str = "mainnet", since_days: int = 60) -> dict:
         "latencyMisses": latency_misses,
     }
     return out
+
+
+def gate_verdict(trades: list[dict], contracts: int, *, now: Optional[datetime] = None) -> dict:
+    """What the live evidence gate would say about these replayed trades.
+
+    The gate looks only at the most recent EVIDENCE_DAYS, whatever window the
+    backtest covers, and scores one contract per trade.
+    """
+    now = now or datetime.now(timezone.utc)
+    cutoff = (now - timedelta(days=crypto15m_evidence.EVIDENCE_DAYS)).strftime("%Y-%m-%d %H:%M:%S")
+    per_contract = max(1, int(contracts))
+    recent = [dict(t, pnlUsd=float(t["pnlUsd"]) / per_contract)
+              for t in trades if str(t.get("at") or "") >= cutoff]
+    return crypto15m_evidence.assess(recent)
 
 
 def _bucketize(trades: list[dict]) -> dict:

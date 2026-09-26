@@ -30,7 +30,8 @@ export function BacktestPanel() {
           <p className="mt-0.5 text-[11px] leading-relaxed text-rom-dim">
             Replays your current crypto settings (direction mode, thresholds, custom rules) through the
             <span className="text-white"> live entry gates</span> over every window this app has recorded
-            and seen settle — taker fills at the recorded ask, Polymarket fees included, held to settlement.
+            and seen settle — taker fills at the recorded ask, Polymarket fees included, exiting where your
+            stop-loss, take-profit or sell-into-strength settings would, otherwise at settlement.
           </p>
         </div>
         <button
@@ -58,6 +59,12 @@ export function BacktestPanel() {
             />
             <Stat label="Max drawdown" value={fmtUsd(res.maxDrawdownUsd)} tone="bad" />
           </div>
+          {res.gate && (
+            <p className={cls('mt-2 text-[11px] leading-relaxed', res.gate.qualified ? 'text-rom-win' : 'text-rom-warn')}>
+              Live evidence gate (last 14 days):{' '}
+              {res.gate.qualified ? `would trade these settings — ${res.gate.reason}.` : `not yet — ${res.gate.reason}.`}
+            </p>
+          )}
           {Object.keys(res.byAsset).length > 0 && (
             <div className="mt-2 flex flex-wrap gap-1.5">
               {Object.entries(res.byAsset).map(([a, st]) => (
