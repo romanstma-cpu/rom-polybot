@@ -561,7 +561,7 @@ export function ScriptsPage() {
                       ? 'border-rom-loss/50 bg-rom-loss/10 text-rom-lossText'
                       : 'border-rom-border text-rom-muted hover:text-white',
                   )}
-                  title="What this script's code does — network, filesystem, credential and dynamic-execution access. Scripts are full Python, so read this before enabling one you didn't write."
+                  title="What this script's code does — network, filesystem, credential and dynamic-execution access. The sandbox refuses those, and this scan is a second look; read it before enabling a script you didn't write."
                 >
                   {(audit ?? sel.audit)?.ok === false
                     ? <ShieldAlert className="h-3.5 w-3.5" />
@@ -742,9 +742,10 @@ export function ScriptsPage() {
                   </div>
                   <p className="mt-1 text-rom-muted">
                     {sel.audit.critical} critical finding(s):{' '}
-                    {sel.audit.categories.join(', ')}. Scripts run as full Python inside the
-                    process holding your <b className="text-rom-warn">decrypted API credentials</b>.
-                    Do not arm code you have not read — check the Risk tab first.
+                    {sel.audit.categories.join(', ')}. Scripts run inside the process holding your{' '}
+                    <b className="text-rom-warn">decrypted API credentials</b>. The sandbox refuses file,
+                    network and code-execution access, but no sandbox is a guarantee — do not arm code you
+                    have not read. Check the Risk tab first.
                   </p>
                 </div>
               )}
@@ -950,11 +951,12 @@ function AuditPanel({ audit, stale }: { audit: ScriptAudit | null; stale: boolea
       )}
 
       <p className="border-t border-rom-border/60 pt-2 text-[11px] leading-relaxed text-rom-dim">
-        Scripts run as <b className="text-rom-muted">full Python</b>, in the same process
-        that holds your <b className="text-rom-warn">decrypted API credentials</b>. This scan reads
-        the source and reports what it recognizes — it is a smoke detector, not a lock, and it
-        cannot see through deliberately obfuscated code (which is why obfuscation is itself
-        reported as critical). Read anything you did not write, especially code an AI generated
+        Scripts run in a <b className="text-rom-muted">restricted Python</b> — no file, network,
+        process or code-execution access, and only pure-computation imports — but in the same
+        process that holds your <b className="text-rom-warn">decrypted API credentials</b>, so no
+        sandbox is a guarantee. This scan reads the source and reports what it recognizes — it is
+        a smoke detector, not a lock, and it cannot see through deliberately obfuscated code
+        (which is why obfuscation is itself reported as critical). Read anything you did not write, especially code an AI generated
         or someone sent you. The money rails at the top of this page still apply to every
         script and cannot be raised from inside one.
       </p>
@@ -1073,9 +1075,11 @@ function DocsPanel({ docs }: { docs: ScriptApiDocs | null }) {
       </div>
       <div className="space-y-1 text-[11px] leading-relaxed text-rom-muted">
         <div>
-          Scripts are <b className="text-white">full Python</b> — imports, classes and the
-          standard library all work. What the code does is <i>reviewed</i>, not restricted:
-          see the <b className="text-white">Risk</b> tab.
+          Scripts are <b className="text-white">restricted Python</b> — classes, dataclasses and
+          the computation parts of the standard library (math, statistics, datetime, json, re,
+          collections ...) work; files, network, eval and double-underscore internals are refused
+          when you save. What is left is also <i>reviewed</i>: see the{' '}
+          <b className="text-white">Risk</b> tab.
         </div>
         <div>
           Injected without an import:{' '}
