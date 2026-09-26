@@ -14,10 +14,10 @@ measures the offset two ways -- through the tape's own reject counters, and
 directly against raw `tradeTime` values -- and reports the distribution, not
 just a verdict, so the operator can see the real margin against the 30s bound.
 
-The stream modules expose almost no observability: no connected flag, no
-last-message time, no counters. Reading their private attributes (`_task`,
-`_books`, `_dirty`) is therefore deliberate and is the only way to answer
-these questions from outside. `us_account_stream.consume_dirty()` is never
+Both authenticated streams report `health()` (connected flag, message
+counts, reconnects), and the account stream's snapshot goes into its check.
+Some questions still need private attributes (`_task`, `_books`, `_dirty`),
+and reading them is deliberate. `us_account_stream.consume_dirty()` is never
 called here -- it *clears* the flag that service.py relies on to trigger
 reconciliation, so a livecheck that consumed it would suppress a real
 reconciliation in the app. The flag is read, never taken.
@@ -326,7 +326,7 @@ def evaluate_first_message(elapsed_s, budget_s, messages, warnings, task_started
         data=data)
 
 
-def evaluate_account_stream(task_alive, dirty, warnings, waited_s):
+def evaluate_account_stream(task_alive, dirty, warnings, waited_s, health=None):
     """Did the private stream reach a subscribed state?
 
     `_dirty` is set in two places -- right after the subscribe frames go out,
@@ -335,8 +335,10 @@ def evaluate_account_stream(task_alive, dirty, warnings, waited_s):
     them. The flag is read here and deliberately not consumed: service.py owns
     it, and taking it would cancel a reconciliation the app still needs.
     """
+    health = dict(health or {})
     data = {'task_alive': bool(task_alive), 'dirty': bool(dirty),
-            'waited_s': round(waited_s, 1), 'warnings': list(warnings)[:5]}
+            'waited_s': round(waited_s, 1), 'warnings': list(warnings)[:5],
+            'health': health}
     if not task_alive:
         return Check(
             name='account stream connects and subscribes',
@@ -361,7 +363,8 @@ def evaluate_account_stream(task_alive, dirty, warnings, waited_s):
     return Check(
         name='account stream connects and subscribes',
         ok=True,
-        detail=f'task alive and subscribed within {waited_s:.0f}s, no reconnects '
+        detail=f'task alive and subscribed within {waited_s:.0f}s, no reconnects, '
+               f'{int(health.get("messages") or 0)} private message(s) '
                '(_dirty read, not consumed)',
         data=data)
 
@@ -616,6 +619,7 @@ async def run():
         account_task = us_account_stream._task
         account_alive = account_task is not None and not account_task.done()
         account_dirty = bool(us_account_stream._dirty)
+        account_health = us_account_stream.health()
     finally:
         # Always, whatever happened: a socket left open here leaks into every
         # later stage and keeps writing into the shared tape.
@@ -637,7 +641,8 @@ async def run():
     checks.append(evaluate_direct_offset(offsets))
     checks.append(evaluate_warmup(delta['resets'], observed))
     checks.append(evaluate_account_stream(account_alive, account_dirty,
-                                          account_log.messages, observed))
+                                          account_log.messages, observed,
+                                          health=account_health))
     checks.append(evaluate_payload_shape(tap.trade_samples, tap.trades))
     checks.append(evaluate_book_shape(books))
     return checks

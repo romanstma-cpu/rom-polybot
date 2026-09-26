@@ -116,4 +116,9 @@ def status() -> dict:
         payload["marketStream"] = us_market_stream.health()
     except Exception:
         payload["marketStream"] = {"state": "unknown", "connected": False}
+    try:
+        import us_account_stream
+        payload["accountStream"] = us_account_stream.health()
+    except Exception:
+        payload["accountStream"] = {"state": "unknown", "connected": False}
     return payload
