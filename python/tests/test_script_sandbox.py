@@ -16,7 +16,6 @@ def test_ordinary_strategy_script_validates():
 
 
 @pytest.mark.parametrize("code", [
-    "import os\ndef decide(ctx):\n    return None\n",
     "import json, math\ndef decide(ctx):\n    return None\n",
     "class Model:\n    pass\ndef decide(ctx):\n    return None\n",
     "def decide(ctx):\n    return ().__class__\n",
@@ -25,8 +24,13 @@ def test_ordinary_strategy_script_validates():
     "_cache = {}\ndef decide(ctx):\n    global _cache\n    return None\n",
     "def decide(ctx):\n    try:\n        pass\n    except:\n        pass\n    return None\n",
 ])
-def test_full_python_is_accepted(code):
+def test_ordinary_python_is_accepted(code):
     assert ss.validate(code) == [], code
+
+
+def test_modules_outside_the_allowlist_are_rejected_before_compiling():
+    errors = ss.validate("import os\ndef decide(ctx):\n    return None\n")
+    assert errors and "import os is not available" in errors[0]
 
 
 def test_script_with_no_entry_hook_is_rejected():
@@ -72,7 +76,7 @@ def test_invalid_script_raises_script_error_on_compile():
         ss.CompiledScript("t2", "def helper():\n    return 1\n")
 
 
-def test_scripts_get_the_real_builtins():
+def test_scripts_can_import_allowed_modules():
     mod = ss.CompiledScript("t3", (
         "import json\n"
         "def decide(ctx):\n"
