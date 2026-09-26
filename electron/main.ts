@@ -344,9 +344,10 @@ async function toggleTradingFromTray(): Promise<void> {
   });
 }
 
-app.on('window-all-closed', (e: Electron.Event) => {
-  e.preventDefault();
-});
+// Keep running in the tray when the last window closes. Having a listener is
+// what replaces Electron's default quit; the event itself is not cancellable
+// (Electron's types stopped passing it one), so there is nothing to prevent.
+app.on('window-all-closed', () => {});
 
 app.on('before-quit', async () => {
   quitting = true;
