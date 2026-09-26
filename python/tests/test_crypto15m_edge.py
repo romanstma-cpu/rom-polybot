@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+import backtest
 import config
 import crypto15m
 import crypto15m_evidence as ev
@@ -328,3 +329,91 @@ def test_status_starts_the_replay_before_the_engine_is_on(fresh_db, monkeypatch)
     started.clear()
     c15t._evidence_for_status(dict(cfg, crypto15m_require_proven_edge=False), "mainnet")
     assert started == []
+
+
+# --- the replay exits where live trading exits --------------------------------
+
+def _exit_cfg(**over):
+    cfg = config.merge_with_defaults({})
+    cfg.update({
+        "crypto15m_enabled": True, "crypto15m_model_autopause": False,
+        "crypto15m_direction_mode": "favorite", "crypto15m_use_rules": False,
+        "crypto15m_paired_mode": False, "crypto15m_time_delay_min": 5.0,
+        "crypto15m_entry_threshold": 0.80, "crypto15m_entry_max": 0.95,
+        "crypto15m_min_delta_pct": 0.0, "crypto15m_entry_style": "taker",
+        "crypto15m_exit_threshold": 0.40, "crypto15m_stop_loss_pct": 0.0,
+        "crypto15m_take_profit": 0.0, "crypto15m_take_profit_pct": 0.0,
+        "crypto15m_sell_into_strength": False,
+    })
+    cfg.update(over)
+    return cfg
+
+
+def _path(*points, up_won=1):
+    """Ticks a minute apart: (mid, bid) for the up side; the first is the entry."""
+    ticks = []
+    for i, (mid, bid) in enumerate(points):
+        ticks.append({
+            "ticker": "W", "asset": "BTC", "up_won": up_won,
+            "sig_close": "2026-09-10T12:15:00Z", "mins_left": 4 - i,
+            "up_prob": mid, "yes_bid": bid, "yes_ask": round(mid + 0.01, 4),
+            "up_ask": round(mid + 0.01, 4), "no_ask": round(1 - mid + 0.01, 4),
+            "delta_pct": 0.01, "observed_at": f"2026-09-10 12:1{i}:00",
+        })
+    return {"W": ticks}
+
+
+def _fee(price):
+    """Taker fee per contract under the schedule in force on the test day."""
+    return backtest.us_fee_per_contract(
+        price, datetime(2026, 9, 10, 12, tzinfo=timezone.utc).timestamp())
+
+
+def _only_trade(ticks, cfg):
+    trades, _n, _m = replay._simulate(ticks, cfg, contracts=1)
+    assert len(trades) == 1
+    return trades[0]
+
+
+def test_a_stop_that_fires_is_a_loss_even_if_the_favorite_recovers():
+    """Live sells at the bid once the mid falls under 40c. The old replay
+    held to settlement and booked this window as a win."""
+    t = _only_trade(_path((0.89, 0.88), (0.35, 0.33), (0.97, 0.96), up_won=1),
+                    _exit_cfg())
+    assert t["exitReason"] == "stop_loss" and not t["won"]
+    assert t["pnlUsd"] == pytest.approx(0.33 - 0.90 - _fee(0.90) - _fee(0.33), abs=1e-4)
+
+
+def test_no_stop_configured_holds_to_settlement():
+    t = _only_trade(_path((0.89, 0.88), (0.35, 0.33), (0.97, 0.96)),
+                    _exit_cfg(crypto15m_exit_threshold=0.0))
+    assert t["exitReason"] == "settlement" and t["won"]
+
+
+def test_percent_stop_uses_the_mid_against_cost():
+    cfg = _exit_cfg(crypto15m_exit_threshold=0.0, crypto15m_stop_loss_pct=0.5)
+    held = _only_trade(_path((0.89, 0.88), (0.46, 0.45)), cfg)
+    assert held["exitReason"] == "settlement"          # 49% down: holds
+    stopped = _only_trade(_path((0.89, 0.88), (0.44, 0.43)), cfg)
+    assert stopped["exitReason"] == "stop_loss"         # 51% down: sells
+
+
+def test_take_profit_is_checked_before_the_stop():
+    cfg = _exit_cfg(crypto15m_take_profit=0.95)
+    t = _only_trade(_path((0.89, 0.88), (0.96, 0.95), (0.30, 0.29)), cfg)
+    assert t["exitReason"] == "take_profit" and t["won"]
+
+
+def test_a_resting_strength_sell_replaces_the_stop():
+    """Live rests the strength sell right after the fill; while it rests,
+    stop-loss and take-profit are never checked."""
+    cfg = _exit_cfg(crypto15m_sell_into_strength=True, crypto15m_sell_strength_cents=95)
+    t = _only_trade(_path((0.89, 0.88), (0.30, 0.29), (0.97, 0.96)), cfg)
+    assert t["exitReason"] == "sell_strength"
+    assert t["pnlUsd"] == pytest.approx(0.95 - 0.90 - _fee(0.90) - _fee(0.95), abs=1e-4)
+
+
+def test_a_stop_with_no_bid_sells_two_cents_under_the_mid():
+    t = _only_trade(_path((0.89, 0.88), (0.35, None)), _exit_cfg())
+    assert t["exitReason"] == "stop_loss"
+    assert t["pnlUsd"] == pytest.approx(0.33 - 0.90 - _fee(0.90) - _fee(0.33), abs=1e-4)

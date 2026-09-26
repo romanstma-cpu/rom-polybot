@@ -192,29 +192,58 @@ def _missing_rule_fields(cfg: dict) -> list[str]:
     return sorted(fields - _DERIVABLE)
 
 
-def _tp_exit_pnl_ct(
+def _side_bid(row: dict, side: str) -> Optional[float]:
+    if side == "up":
+        v = row.get("yes_bid")
+    else:
+        ya = row.get("yes_ask")
+        v = (1.0 - float(ya)) if ya is not None else None
+    v = _num(v)
+    return v if v is not None and 0.0 < v < 1.0 else None
+
+
+def _exit_pnl_ct(
     ticks: list[dict], entry_idx: int, side: str, cost: float, cfg: dict
-) -> Optional[float]:
-    tp_price = crypto15m._const(cfg, "take_profit")
-    tpp = crypto15m._const(cfg, "take_profit_pct")
-    if tp_price <= 0 and tpp <= 0:
-        return None
-    entry_fee = bt.us_fee_per_contract(cost, bt.tick_epoch(ticks[entry_idx]))
-    for t2 in ticks[entry_idx + 1:]:
-        if side == "up":
-            bid = t2.get("yes_bid")
-        else:
-            ya = t2.get("yes_ask")
-            bid = (1.0 - float(ya)) if ya is not None else None
-        if bid is None:
+) -> Optional[tuple[float, str]]:
+    """Per-contract P&L and reason of the first exit live trading would take.
+
+    Mirrors crypto15m_trader._manage_position tick by tick. A sell-into-
+    strength order rests from the first check after the fill and, while it
+    rests, nothing else is checked. Otherwise take-profit (price target, then
+    percent above cost, on the best bid) comes before the stop-loss (the side's
+    mid below the exit threshold, or its percent loss past the stop), which
+    sells at the bid, or two cents under the mid when there is no bid. None
+    means the position is held to settlement.
+    """
+    at_entry = bt.tick_epoch(ticks[entry_idx])
+    entry_fee = bt.us_fee_per_contract(cost, at_entry)
+
+    def sell(price: float, row: dict, reason: str) -> tuple[float, str]:
+        exit_fee = bt.us_fee_per_contract(price, bt.tick_epoch(row))
+        return (price - cost) - entry_fee - exit_fee, reason
+
+    held = {"status": "filled", "filled_contracts": 1, "cost_usd": cost,
+            "avg_entry_cents": cost * 100.0}
+    strength = crypto15m_trader.strength_exit_cents(held, cfg)
+    stop_mid = crypto15m._const(cfg, "exit_threshold")
+    stop_pct = crypto15m_trader._clamp01(crypto15m._const(cfg, "stop_loss_pct"))
+    for row in ticks[entry_idx + 1:]:
+        bid = _side_bid(row, side)
+        bid_c = int(round(bid * 100)) if bid is not None else None
+        if strength is not None:
+            if bid_c is not None and bid_c >= strength:
+                return sell(strength / 100.0, row, "sell_strength")
             continue
-        bid = float(bid)
-        if not (0.0 < bid < 1.0):
+        if (crypto15m_trader.should_take_profit(held, bid_c, cfg)
+                or crypto15m_trader.should_take_profit_pct(held, bid_c, cfg)):
+            return sell(bid, row, "take_profit")
+        up = _num(row.get("up_prob"))
+        if up is None:
             continue
-        hit = (tp_price > 0 and bid >= tp_price) or (tpp > 0 and bid >= cost * (1.0 + tpp))
-        if hit:
-            exit_fee = bt.us_fee_per_contract(bid, bt.tick_epoch(t2))
-            return (bid - cost) - entry_fee - exit_fee
+        mid = up if side == "up" else 1.0 - up
+        if mid < stop_mid or (stop_pct > 0 and (cost - mid) / cost >= stop_pct):
+            price = bid if bid is not None else max(0.01, mid - 0.02)
+            return sell(price, row, "stop_loss")
     return None
 
 
@@ -333,11 +362,10 @@ def _simulate(
             won = up_won if side == "up" else (1 - up_won)
             pnl_ct = (1.0 - cost - fee) if won else (-cost - fee)
             exit_reason = "settlement"
-            tp_ct = _tp_exit_pnl_ct(ticks, fill_idx, side, cost, eff)
-            if tp_ct is not None:
-                pnl_ct = tp_ct
-                won = tp_ct > 0
-                exit_reason = "take_profit"
+            early = _exit_pnl_ct(ticks, fill_idx, side, cost, eff)
+            if early is not None:
+                pnl_ct, exit_reason = early
+                won = pnl_ct > 0
             trades.append({
                 "ticker": ticker, "asset": asset["asset"], "side": side,
                 "costCents": round(cost * 100, 1),
@@ -417,7 +445,7 @@ def replay(cfg: dict, *, env: str = "mainnet", since_days: int = 60) -> dict:
             "missed hedge leaves a naked single-side position."
         )
     caveats += [
-        "Single-side take-profit exits (price target + percent-above-cost) ARE simulated at the recorded bid (entry + exit taker fees charged); stop-loss and paired-leg take-profit exits are NOT — those still hold to settlement.",
+        "Single-side exits ARE simulated in the live engine's order: a sell-into-strength order at its target, else take-profit (price or percent) at the recorded bid, else stop-loss (mid under the exit threshold, or percent loss) at the recorded bid, with entry and exit taker fees charged. Exits assume the sell fills at that price; live, a stop in a falling book can fill lower. Paired legs still hold to settlement.",
         f"Ticks are ~4-25s apart over {since_days} days of app uptime only; the gate could have fired between ticks.",
         "In-sample: any threshold tuned against this panel is fit to the past. Watch it run detection-only before arming.",
         "Live model-calibration auto-pause is NOT simulated — live trading can pause where this replay keeps trading.",
