@@ -3044,8 +3044,14 @@ def _selftest() -> int:
         mod = ss.CompiledScript("selftest", good)
         intent = mod.call("decide", {"minsLeft": 1.0})
         assert intent and intent.get("side") == "up", "decide() lost its intent"
-        assert not ss.validate("import os\ndef decide(ctx):\n    return None"), \
-            "validator rejected an import (scripts are unsandboxed now)"
+        assert not ss.validate("import json\ndef decide(ctx):\n    return None"), \
+            "validator rejected an allowed import"
+        assert ss.validate("import os\ndef decide(ctx):\n    return None"), \
+            "validator accepted an import outside the script allowlist"
+        # The sandbox imports these by name at run time, where PyInstaller's
+        # analysis cannot see it; each one the docs promise must be bundled.
+        for name in sorted(ss.ALLOWED_MODULES):
+            __import__(name)
         assert ss.validate("def nope(ctx):\n    return None\n"), \
             "validator accepted a script with no entry hook"
         try:

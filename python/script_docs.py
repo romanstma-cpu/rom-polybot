@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import db as dbmod
 import replay
+import script_sandbox
+
+# The modules a script may import, as the sandbox enforces them.
+SCRIPT_MODULES = ", ".join(sorted(script_sandbox.ALLOWED_MODULES - {"__future__"}))
 
 LIVE_ONLY_FIELDS = ("bookImbalance", "peersAgree", "marketBias", "arbEdgeCents")
 
@@ -176,8 +180,8 @@ decide / decide_market / manage / decide_signal / supervise):
 Pre-injected globals (no import needed): `math`, `statistics`, `state` (a
 persistent dict that survives between ticks — use it for cross-tick memory),
 and `log(msg)` (shows in the app's Script log panel; print() is aliased to
-it). Scripts are ordinary Python and MAY import from the standard library —
-but see the rules below, because the app audits what you import.
+it). Scripts are Python with a restricted set of builtins and imports —
+see the rules below.
 '''
 
 EXAMPLE_SIMPLE = '''\
@@ -347,15 +351,19 @@ comparing; a None you don't check will crash and disable the script):
 {chr(10).join(fields)}
 
 EXECUTION RULES:
-- The script runs as FULL PYTHON. There is no language sandbox. You may
-  import from the standard library, define classes, and use any builtin.
-- But the app STATICALLY AUDITS every script and shows the user any network,
-  filesystem, subprocess, credential or dynamic-execution access it finds,
-  flagged as critical. A strategy needs NONE of those. Do not import
-  requests/urllib/socket/os/subprocess/base64/pickle, do not read or write
-  files, do not call eval/exec/getattr-with-a-computed-name, and do not
-  reference the app's own modules. A script that trips the audit will be
-  shown to the user as suspicious, and rightly so — write a plain strategy.
+- The script runs in a RESTRICTED Python. Allowed imports: {SCRIPT_MODULES}
+  (plus `from __future__ import annotations`). Nothing else imports — no
+  os, sys, requests, socket, subprocess, pickle, base64, operator or string.
+- Available builtins are the ordinary data ones (len, range, sorted, dict,
+  list, min, max, round, isinstance, getattr, ...). open, eval, exec,
+  compile, input, vars and globals do not exist.
+- Double-underscore names and attributes are refused except __init__,
+  __name__, __qualname__, __doc__ and __class__, so super().__init__() and
+  type(x).__name__ work. Frame and traceback internals (gi_frame, f_back,
+  tb_frame ...) are refused too. Classes, dataclasses, enums, generators and
+  single-underscore attributes all work normally.
+- A strategy needs none of what is refused. A script that uses it fails to
+  save with the line and the reason; rewrite it as a plain strategy.
 - Hooks are called SYNCHRONOUSLY on the engine loop and must return fast:
   the per-call ceiling is ~1 second of wall clock and the whole trading loop
   waits behind you. No sleeping, no network calls, no heavy loops per tick —
