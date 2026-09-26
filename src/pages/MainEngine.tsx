@@ -520,7 +520,7 @@ export function MainEnginePage({ onNav }: { onNav: (page: PageId) => void }) {
 
       <Section
         title="Custom entry rules"
-        description="Advanced: compose your own entry from confidence, edge and entry cost. When on, this replaces the confidence/edge/price-bound gates above — source toggles, momentum signal-type, and category filters still apply."
+        description="Advanced: compose your own entry from confidence, edge and entry cost. When on, this replaces the confidence, edge and min-entry gates above; the max-entry price still caps every order, and an entry-cost rule is checked again at the order price. Source toggles, momentum signal-type, and category filters still apply."
       >
         <Card>
           <RuleBuilder

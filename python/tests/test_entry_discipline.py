@@ -211,3 +211,39 @@ def test_practice_trade_settles_into_separate_paper_performance(
     assert paper["resolved"] == 1
     assert paper["wins"] == 1
     assert paper["pnl_usd"] > 0
+
+
+@pytest.mark.parametrize("rule_floor,enters", [(50, False), (30, True)])
+def test_custom_rules_hold_the_order_price_to_their_entry_cost_rule(
+    tmp_path, monkeypatch, fee_clock, rule_floor, enters
+):
+    """Custom rules replace the min-entry floor, but they judged the signal's
+    price. When the book falls between the signal and the order, the order
+    price must still clear the entry-cost rule, as it clears the floor
+    without rules; the order used to go through at any price down to 1c."""
+    at = fee_clock(US_FEE_JULY)
+    monkeypatch.setattr(db, "db_path", lambda: tmp_path / "rules.db")
+    db.init_db()
+    cfg = merge_with_defaults({
+        "enable_trading": False, "main_paper_trading": True, "use_rules": True,
+        "rules": [{"field": "costCents", "op": ">=", "value": rule_floor}],
+    })
+    monkeypatch.setattr(trader, "get_env", lambda: "mainnet")
+
+    async def quote(*_a):
+        return quote_with_depth({"bid_cents": 40, "ask_cents": 41})
+
+    async def meta(*_a):
+        return {"min_size": 1}
+
+    monkeypatch.setattr(trader, "get_quote", quote)
+    monkeypatch.setattr(trader, "get_market_meta", meta)
+    signal = {"id": 7, "ticker": "RULES", "event_ticker": "EV", "title": "Rules",
+              "created_at": at.isoformat(), "category": "sports",
+              "price": 0.60, "confidence": 80, "taker_side": "yes"}
+    assert trader.should_trade(signal, "whale", cfg) == (True, "rules pass")
+    row = asyncio.run(trader.execute_signal(signal, "whale", cfg, 1000, paper=True))
+    if enters:
+        assert row is not None and row["avg_fill_price_cents"] == 41
+    else:
+        assert row is None

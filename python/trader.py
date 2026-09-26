@@ -677,7 +677,22 @@ async def execute_signal(
         logger.info("[skip] %s: remaining signal margin %.1f below execution threshold", signal["ticker"], edge_pts)
         return None
     hi = int(cfg["max_entry_price_cents"])
-    lo = 1 if bool(cfg.get("use_rules")) else int(cfg["min_entry_price_cents"])
+    lo = int(cfg["min_entry_price_cents"])
+    if bool(cfg.get("use_rules")):
+        # Custom rules replace the min-entry floor, but they judged the
+        # signal's price. Hold the order price to the same entry-cost
+        # conditions, as the floor holds it when rules are off.
+        lo = 1
+        cost_rules = [r for r in cfg.get("rules") or []
+                      if isinstance(r, dict) and r.get("field") == "costCents"]
+        if cost_rules:
+            ok, why = rules_engine.evaluate_rules({"costCents": limit_cents}, cost_rules)
+            if not ok:
+                logger.info(
+                    f"[skip] {signal['ticker']}: order price {limit_cents}c fails "
+                    f"your entry-cost rule ({why}; book moved since signal)"
+                )
+                return None
     if limit_cents > hi:
         logger.info(
             f"[skip] {signal['ticker']}: order price {limit_cents}c above your "
