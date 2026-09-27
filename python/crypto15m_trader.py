@@ -612,17 +612,36 @@ def streak_multiplier(cfg: dict, env: str) -> float:
     return max(0.1, min(cap, mult))
 
 
+def _sizing_evidence(cfg: dict, env: str) -> Optional[dict]:
+    if (cfg.get("crypto15m_sizing_mode") or "").lower() != "evidence" or cfg.get("_parlay"):
+        return None
+    return crypto15m_evidence.verdict(cfg, env)
+
+
 def compute_entry_contracts(
     cfg: dict, *, entry_limit_cents: int, balance_usd: float, order_size: int,
     balance_known: bool = False, streak_mult: float = 1.0,
+    evidence: Optional[dict] = None,
 ) -> int:
     price = max(0.01, int(entry_limit_cents) / 100.0)
     bal = max(0.0, float(balance_usd or 0.0))
     if balance_known and bal <= 0.0:
         return 0
     mode = (cfg.get("crypto15m_sizing_mode") or "fixed").lower()
+    if mode == "evidence" and cfg.get("_parlay"):
+        # A parlay hour runs its own config, which the base strategy's
+        # evidence does not describe.
+        mode = "fixed"
 
-    if mode == "balance_pct" and bal > 0:
+    if mode == "evidence":
+        # Fractional Kelly on the evidence gate's pessimistic loss rate: no
+        # qualified verdict, no bankroll or no conservative edge means no bet.
+        kelly = float((evidence or {}).get("kellyFraction") or 0.0)
+        if not (evidence or {}).get("qualified") or kelly <= 0 or bal <= 0:
+            return 0
+        scale = max(0.01, min(1.0, float(cfg.get("crypto15m_kelly_fraction", 0.25) or 0.25)))
+        contracts = int((bal * kelly * scale) // price)
+    elif mode == "balance_pct" and bal > 0:
         pct = _clamp01(cfg.get("crypto15m_balance_pct", 0.02))
         contracts = int((bal * pct) // price)
     else:
@@ -818,6 +837,7 @@ async def _open_entry(a: dict, cfg: dict, env: str, balance_usd: float) -> Optio
         order_size=max(1, int(cfg.get("crypto15m_order_size", 1))),
         balance_known=trader.last_balance_read_ok(),
         streak_mult=streak_mult,
+        evidence=_sizing_evidence(cfg, env),
     )
     if order_size < 1:
         logger.info(
@@ -1073,6 +1093,7 @@ async def _open_paired_entry(
         order_size=max(1, int(cfg.get("crypto15m_order_size", 1))),
         balance_known=trader.last_balance_read_ok(),
         streak_mult=streak_mult,
+        evidence=_sizing_evidence(cfg, env),
     )
     dom_n, hedge_n = units * tilt, units
     if units < 1:
@@ -2027,7 +2048,7 @@ async def run_tick(cfg: dict, *, authed: bool) -> list[dict]:
     # Replays the configured strategy in the background; entries below wait
     # for a verdict. Parlay schedules are exempt: each hour's config was
     # already chosen on held-out windows by the parlay generator.
-    if crypto15m_evidence.required(cfg):
+    if _needs_evidence(cfg):
         crypto15m_evidence.ensure_fresh(cfg, env)
 
     parlay_armed, parlay_sched = parlay_state()
@@ -2067,7 +2088,7 @@ async def run_tick(cfg: dict, *, authed: bool) -> list[dict]:
             _block_reasons[a.get("asset") or sym or "?"] = _why
             continue
         if not eff_cfg.get("_parlay"):
-            proven, proven_why = crypto15m_evidence.gate(cfg, env)
+            proven, proven_why = crypto15m_evidence.gate(cfg, env, a.get("asset") or sym)
             if not proven:
                 _block_reasons[a.get("asset") or sym or "?"] = proven_why
                 continue
@@ -2118,15 +2139,27 @@ async def _sizing_preview(cfg: dict, authed: bool) -> dict:
         est_price_cents = max(1, min(99, int(round(base * 100)) - 1))
     else:
         est_price_cents = entry_limit_cents(base, crypto15m._const(cfg, "entry_diff"))
-    streak_mult = streak_multiplier(cfg, trader.get_env())
+    env = trader.get_env()
+    streak_mult = streak_multiplier(cfg, env)
+    evidence = _sizing_evidence(cfg, env)
     est_contracts = compute_entry_contracts(
         cfg, entry_limit_cents=est_price_cents, balance_usd=bal, order_size=order_size,
-        streak_mult=streak_mult,
+        streak_mult=streak_mult, evidence=evidence,
     )
     est_cost = est_contracts * est_price_cents / 100.0
 
     note = ""
-    if mode == "balance_pct" and bal <= 0:
+    if mode == "evidence":
+        if not (evidence or {}).get("qualified"):
+            note = ("Proven-edge sizing bets nothing until the evidence gate "
+                    "qualifies these settings.")
+        elif bal <= 0:
+            note = "Proven-edge sizing needs a known balance."
+        else:
+            note = (f"Kelly stake {100 * float(evidence.get('kellyFraction') or 0):.1f}% "
+                    f"of balance at the pessimistic loss rate, times your "
+                    f"{float(cfg.get('crypto15m_kelly_fraction', 0.25) or 0.25):g} fraction.")
+    elif mode == "balance_pct" and bal <= 0:
         note = "No balance yet — using fixed order size. Connect Polymarket or set a start bankroll to size by %."
     elif max_loss_pct > 0 and bal > 0 and est_contracts < 1:
         note = f"Max-loss budget too small to fund a contract at ~{est_price_cents}c."
@@ -2144,10 +2177,15 @@ async def _sizing_preview(cfg: dict, authed: bool) -> dict:
     }
 
 
+def _needs_evidence(cfg: dict) -> bool:
+    return (crypto15m_evidence.required(cfg)
+            or (cfg.get("crypto15m_sizing_mode") or "").lower() == "evidence")
+
+
 def _evidence_for_status(cfg: dict, env: str) -> Optional[dict]:
     # Viewing the page starts the replay too, so a verdict on these settings
     # is there before the engine is switched on, not only after.
-    if crypto15m_evidence.required(cfg):
+    if _needs_evidence(cfg):
         crypto15m_evidence.ensure_fresh(cfg, env)
     return crypto15m_evidence.verdict(cfg, env)
 

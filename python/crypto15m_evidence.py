@@ -49,11 +49,13 @@ REFRESH_SEC = 1800.0
 RETRY_FAILED_SEC = 300.0
 BOOTSTRAP_ROUNDS = 600
 LOSS_RATE_Z = 1.645          # one-sided 95%
+MIN_ASSET_TRADES = 20        # below this a coin's own record decides nothing
 
 # Settings that size, pace or cap the engine but do not change which trades
 # it would take. Changing them must not throw away a verdict.
 _NOT_STRATEGY = frozenset({
     "crypto15m_enabled", "crypto15m_order_size", "crypto15m_sizing_mode",
+    "crypto15m_kelly_fraction",
     "crypto15m_balance_pct", "crypto15m_max_loss_pct",
     "crypto15m_max_concurrent", "crypto15m_daily_loss_limit",
     "crypto15m_lifetime_loss_limit_pct", "crypto15m_lifetime_loss_limit_usd",
@@ -95,7 +97,8 @@ def assess(trades: list[dict], *, since_days: int = EVIDENCE_DAYS) -> dict:
     rows = sorted(
         ({"at": str(t.get("at") or ""),
           "pnl": float(t["pnlUsd"]) - SLIPPAGE_USD,
-          "cost": float(t.get("costCents") or 0.0) / 100.0}
+          "cost": float(t.get("costCents") or 0.0) / 100.0,
+          "asset": str(t.get("asset") or "")}
          for t in trades),
         key=lambda r: r["at"])
     n = len(rows)
@@ -105,6 +108,8 @@ def assess(trades: list[dict], *, since_days: int = EVIDENCE_DAYS) -> dict:
         "sinceDays": since_days, "minTrades": MIN_TRADES, "minDays": MIN_DAYS,
         "winRate": None, "evCents": None, "conservativeEvCents": None,
         "lowerEvCents": None, "halvesPositive": None, "reason": "",
+        "lossRateHi": None, "meanWinCents": None, "meanLossCents": None,
+        "kellyFraction": 0.0, "byAsset": {}, "excludedAssets": [],
     }
     if n:
         out["winRate"] = round(sum(1 for r in rows if r["pnl"] > 0) / n, 4)
@@ -124,6 +129,13 @@ def assess(trades: list[dict], *, since_days: int = EVIDENCE_DAYS) -> dict:
     loss_rate_hi = _wilson_ub(len(losses), n, LOSS_RATE_Z)
     conservative = (1.0 - loss_rate_hi) * mean_win - loss_rate_hi * mean_loss
     out["conservativeEvCents"] = round(100.0 * conservative, 2)
+    out["lossRateHi"] = round(loss_rate_hi, 4)
+    out["meanWinCents"] = round(100.0 * mean_win, 2)
+    out["meanLossCents"] = round(100.0 * mean_loss, 2)
+    stake = sum(r["cost"] for r in rows) / n + SLIPPAGE_USD
+    out["kellyFraction"] = round(kelly_fraction(
+        1.0 - loss_rate_hi, mean_win, mean_loss, stake), 4)
+    out["byAsset"], out["excludedAssets"] = _asset_breakdown(rows)
 
     by_day: dict[str, list[float]] = {}
     for r in rows:
@@ -162,6 +174,53 @@ def assess(trades: list[dict], *, since_days: int = EVIDENCE_DAYS) -> dict:
             f"proven on {n} replayed trades over {len(days)} days: "
             f"{out['evCents']:+.2f}c per contract, low end {out['lowerEvCents']:+.2f}c")
     return out
+
+
+def kelly_fraction(p_win: float, mean_win: float, mean_loss: float,
+                   stake: float) -> float:
+    """Growth-optimal share of bankroll to stake on one trade, or 0.
+
+    A trade that stakes `stake` per contract and wins `mean_win` or loses
+    `mean_loss` per contract, with probability `p_win` of winning, has the
+    Kelly optimum stake * (p / loss - q / win). Held to settlement at cost c
+    this reduces to (p - c) / (1 - c). Fed the pessimistic loss rate, it is
+    zero exactly when the evidence gate's conservative profit is.
+    """
+    if mean_win <= 0 or mean_loss <= 0 or stake <= 0:
+        return 0.0
+    f = stake * (p_win / mean_loss - (1.0 - p_win) / mean_win)
+    return max(0.0, min(1.0, f))
+
+
+def _asset_breakdown(rows: list[dict]) -> tuple[dict, list[str]]:
+    """Per-coin record, and the coins that clearly lose.
+
+    A coin is excluded only when it has MIN_ASSET_TRADES replayed trades and
+    even the optimistic end (95th percentile of a bootstrap) of its profit
+    per trade is below zero. Unproven is not the same as losing: a coin with
+    too few trades, or a mixed record, stays in.
+    """
+    by: dict[str, list[float]] = {}
+    for r in rows:
+        if r["asset"]:
+            by.setdefault(r["asset"], []).append(r["pnl"])
+    out: dict[str, dict] = {}
+    excluded: list[str] = []
+    for asset, pnls in sorted(by.items()):
+        n = len(pnls)
+        row = {"n": n, "evCents": round(100.0 * sum(pnls) / n, 2),
+               "upperEvCents": None, "excluded": False}
+        if n >= MIN_ASSET_TRADES:
+            rng = random.Random(271828)
+            means = sorted(sum(rng.choices(pnls, k=n)) / n
+                           for _ in range(BOOTSTRAP_ROUNDS))
+            upper = means[int(0.95 * BOOTSTRAP_ROUNDS)]
+            row["upperEvCents"] = round(100.0 * upper, 2)
+            if upper < 0:
+                row["excluded"] = True
+                excluded.append(asset)
+        out[asset] = row
+    return out, excluded
 
 
 def evaluate(cfg: dict, env: str, *, since_days: int = EVIDENCE_DAYS) -> dict:
@@ -216,8 +275,8 @@ def ensure_fresh(cfg: dict, env: str) -> None:
     _refreshing[key] = asyncio.get_running_loop().create_task(_run())
 
 
-def gate(cfg: dict, env: str) -> tuple[bool, str]:
-    """May a live entry go ahead under this configuration?"""
+def gate(cfg: dict, env: str, asset: str = "") -> tuple[bool, str]:
+    """May a live entry go ahead under this configuration, on this coin?"""
     if not required(cfg):
         return True, ""
     have = verdict(cfg, env)
@@ -225,4 +284,10 @@ def gate(cfg: dict, env: str) -> tuple[bool, str]:
         return False, "no proven edge yet: checking your recorded windows"
     if not have.get("qualified"):
         return False, f"no proven edge ({have.get('reason') or 'not qualified'})"
+    if asset and asset in (have.get("excludedAssets") or []):
+        rec = (have.get("byAsset") or {}).get(asset) or {}
+        return False, (
+            f"{asset} left out: it lost money in the replay "
+            f"({rec.get('evCents', 0):+.2f}c per contract over {rec.get('n', 0)} "
+            f"trades; even the optimistic end is {rec.get('upperEvCents', 0):+.2f}c)")
     return True, ""

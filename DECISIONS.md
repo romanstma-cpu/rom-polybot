@@ -3,6 +3,24 @@
 Assumptions made while working without confirmation. Each entry states the
 ambiguity, the choice, and why it is the safest reasonable option.
 
+## 2026-09-27 — leave out coins that clearly lose; size by the proven edge only on request
+
+Once the gate qualifies a crypto strategy, one verdict covers every coin, so a
+profitable coin can carry one that loses. Coins are now left out of live
+entries when their own replayed record clearly loses: at least 20 trades, and
+even the 95th percentile of a bootstrap of their profit per trade is below
+zero. The asymmetry is deliberate. Dropping a coin can only reduce trading, and
+the overall verdict is still computed on every coin, so leaving one out never
+turns an unproven strategy into a proven one. Unproven is not the same as
+losing: a coin with a thin or mixed record stays in.
+
+Sizing gains a "proven edge" mode: a share (quarter by default) of the Kelly
+stake computed from the verdict, with the loss rate at its 95% upper bound and
+the replay's own average win and loss per contract. It is opt-in, not the
+default, because it is the one change here that can make bets larger; with no
+qualified verdict it bets nothing. Max loss per bet and the balance caps still
+bound it.
+
 ## 2026-09-26 — the crypto engine trades live only on replayed evidence of a net edge
 
 The main engine will not trade a signal group live until held-out settled

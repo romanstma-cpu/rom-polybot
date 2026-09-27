@@ -225,7 +225,8 @@ def test_slippage_is_charged_on_every_trade():
 def test_sizing_and_limits_do_not_invalidate_a_verdict():
     base = config.merge_with_defaults({})
     same = dict(base, crypto15m_order_size=50, crypto15m_daily_loss_limit=-5.0,
-                crypto15m_enabled=not base["crypto15m_enabled"])
+                crypto15m_enabled=not base["crypto15m_enabled"],
+                crypto15m_sizing_mode="evidence", crypto15m_kelly_fraction=0.5)
     other = dict(base, crypto15m_entry_threshold=0.80)
     assert ev.fingerprint(same) == ev.fingerprint(base)
     assert ev.fingerprint(other) != ev.fingerprint(base)
@@ -438,3 +439,107 @@ def test_the_backtest_payload_carries_the_verdict(fresh_db):
     out = replay.replay(_favorite_cfg(), env="mainnet", since_days=60)
     assert out["gate"]["qualified"] is False
     assert "not enough evidence" in out["gate"]["reason"]
+
+
+# --- sizing from the evidence, and coins that clearly lose -------------------
+
+def test_kelly_matches_the_binary_formula_when_held_to_settlement():
+    # Stake c, win 1 - c, lose c: Kelly is (p - c) / (1 - c).
+    assert ev.kelly_fraction(0.85, 0.30, 0.70, 0.70) == pytest.approx(0.5)
+    assert ev.kelly_fraction(0.60, 0.30, 0.70, 0.70) == 0.0     # p below cost
+    assert ev.kelly_fraction(0.99, 0.0, 0.70, 0.70) == 0.0      # nothing to win
+
+
+def test_the_verdict_carries_a_kelly_stake_at_the_pessimistic_loss_rate():
+    v = ev.assess(_trades(("W" * 11 + "L") * 6, cost=0.70))
+    assert v["qualified"] and v["kellyFraction"] > 0
+    stake = 0.70 + ev.SLIPPAGE_USD
+    assert v["kellyFraction"] == pytest.approx(ev.kelly_fraction(
+        1 - v["lossRateHi"], v["meanWinCents"] / 100, v["meanLossCents"] / 100, stake),
+        abs=1e-3)
+    # The pessimistic loss rate keeps it well under the optimistic stake.
+    wins = 66 / 72
+    assert v["kellyFraction"] < ev.kelly_fraction(
+        wins, v["meanWinCents"] / 100, v["meanLossCents"] / 100, stake)
+
+
+def _two_coins():
+    start = datetime(2026, 8, 1, tzinfo=timezone.utc)
+    good = _trades(("W" * 11 + "L") * 10, cost=0.70, start=start)
+    bad = _trades("WLL" * 8, cost=0.70, start=start + timedelta(minutes=7))
+    return ([dict(t, asset="BTC") for t in good] + [dict(t, asset="DOGE") for t in bad])
+
+
+def test_a_coin_that_clearly_loses_is_left_out_of_a_proven_strategy():
+    v = ev.assess(_two_coins())
+    assert v["qualified"], v["reason"]
+    assert v["excludedAssets"] == ["DOGE"]
+    assert v["byAsset"]["DOGE"]["upperEvCents"] < 0
+    assert not v["byAsset"]["BTC"]["excluded"]
+
+
+def test_the_gate_blocks_only_the_excluded_coin(fresh_db):
+    cfg = config.merge_with_defaults({})
+    ev._verdicts[("mainnet", ev.fingerprint(cfg))] = dict(ev.assess(_two_coins()), evaluatedAt=0)
+    assert ev.gate(cfg, "mainnet", "BTC") == (True, "")
+    ok, why = ev.gate(cfg, "mainnet", "DOGE")
+    assert not ok and "DOGE left out" in why
+
+
+def test_a_coin_with_few_trades_is_never_excluded():
+    start = datetime(2026, 8, 1, tzinfo=timezone.utc)
+    trades = [dict(t, asset="BTC") for t in _trades(("W" * 11 + "L") * 6, cost=0.70, start=start)]
+    trades += [dict(t, asset="XRP") for t in _trades("L" * (ev.MIN_ASSET_TRADES - 1), cost=0.70, start=start)]
+    v = ev.assess(trades)
+    assert v["byAsset"]["XRP"]["upperEvCents"] is None
+    assert "XRP" not in v["excludedAssets"]
+
+
+def _sizing_cfg(**over):
+    return dict(config.merge_with_defaults({}), crypto15m_sizing_mode="evidence",
+                crypto15m_kelly_fraction=0.25, **over)
+
+
+def test_evidence_sizing_stakes_a_share_of_the_kelly_fraction():
+    proven = {"qualified": True, "kellyFraction": 0.2}
+    # $1000 x 0.2 Kelly x 0.25 share = $50 at 50c = 100 contracts.
+    assert c15t.compute_entry_contracts(
+        _sizing_cfg(), entry_limit_cents=50, balance_usd=1000.0, order_size=5,
+        evidence=proven) == 100
+    # Max loss per bet still caps it: 2% of $1000 = $20 = 40 contracts.
+    assert c15t.compute_entry_contracts(
+        _sizing_cfg(crypto15m_max_loss_pct=0.02), entry_limit_cents=50,
+        balance_usd=1000.0, order_size=5, evidence=proven) == 40
+
+
+@pytest.mark.parametrize("evidence,balance", [
+    (None, 1000.0),
+    ({"qualified": False, "kellyFraction": 0.2}, 1000.0),
+    ({"qualified": True, "kellyFraction": 0.0}, 1000.0),
+    ({"qualified": True, "kellyFraction": 0.2}, 0.0),
+])
+def test_evidence_sizing_bets_nothing_without_proof_or_bankroll(evidence, balance):
+    assert c15t.compute_entry_contracts(
+        _sizing_cfg(), entry_limit_cents=50, balance_usd=balance, order_size=5,
+        evidence=evidence) == 0
+
+
+def test_a_parlay_hour_sizes_as_fixed_under_evidence_mode():
+    assert c15t.compute_entry_contracts(
+        dict(_sizing_cfg(), _parlay=True), entry_limit_cents=50, balance_usd=1000.0,
+        order_size=7, evidence=None) == 7
+
+
+def test_only_evidence_sizing_reads_the_verdict(fresh_db):
+    cfg = config.merge_with_defaults({})
+    ev._verdicts[("mainnet", ev.fingerprint(cfg))] = {"qualified": True, "kellyFraction": 0.1, "evaluatedAt": 0}
+    assert c15t._sizing_evidence(cfg, "mainnet") is None
+    evid = dict(cfg, crypto15m_sizing_mode="evidence")
+    ev._verdicts[("mainnet", ev.fingerprint(evid))] = {"qualified": True, "kellyFraction": 0.1, "evaluatedAt": 0}
+    assert c15t._sizing_evidence(evid, "mainnet")["kellyFraction"] == 0.1
+
+
+def test_evidence_sizing_starts_the_replay_even_with_the_gate_off():
+    cfg = dict(config.merge_with_defaults({}), crypto15m_require_proven_edge=False)
+    assert not c15t._needs_evidence(cfg)
+    assert c15t._needs_evidence(dict(cfg, crypto15m_sizing_mode="evidence"))
