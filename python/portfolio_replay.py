@@ -215,9 +215,20 @@ class Portfolio:
         sides={}
         for _,s,source in candidates:
             sides.setdefault(s['ticker'],set()).add(trader._signal_cost_cents(s,source)[0])
-        if self.cfg.get('sizing_mode') == 'kelly':
+        # Mirror live: with the qualified-edge rule on (the default), nothing
+        # trades until a signal group qualifies, candidates are ranked by
+        # calibrated return, and large-trade and momentum entries are priced
+        # from the calibrated edge. Replaying the heuristic score instead
+        # would trade signals live trading refuses.
+        requires_qualified=bool(self.cfg.get('require_qualified_edge',True))
+        use_calibration=requires_qualified or self.cfg.get('sizing_mode') == 'kelly'
+        if use_calibration:
             if self.calibration is None or self.now-self.calibration['asof'] >= 300:
                 self.calibration=signal_calibration.fit(self.events,self.now)
+            if requires_qualified and not self.calibration.get('bins'):
+                if candidates:
+                    self.rejected['no qualified signal group yet']+=len(candidates)
+                return
             candidates.sort(key=lambda c:signal_calibration.capital_priority(c[1],c[2],self.now,self.calibration),reverse=True)
         else:
             candidates.sort(key=lambda c:trader._compute_edge(c[1],c[2]),reverse=True)
@@ -249,13 +260,12 @@ class Portfolio:
             except ValueError as exc:
                 self.rejected[str(exc)]+=1;continue
             edge=remaining_signal_margin(trader._compute_edge(sig,source),signal_cents,limit)
-            if self.cfg.get('sizing_mode') == 'kelly':
-                if self.calibration is None or self.now-self.calibration['asof'] >= 300:
-                    self.calibration=signal_calibration.fit(self.events,self.now)
+            if use_calibration and (self.cfg.get('sizing_mode') == 'kelly'
+                                    or source in ('whale','momentum')):
                 try:
                     edge=signal_calibration.calibrated_edge(sig,source,limit,self.now,self.calibration)
                 except ValueError:
-                    self.rejected['Kelly calibration unavailable']+=1;continue
+                    self.rejected['no qualified edge for this signal group']+=1;continue
             threshold=float(self.cfg['min_edge_pts_momentum' if source=='momentum' else 'min_edge_pts_whale'])
             if edge<max(0,threshold) or limit>self.cfg['max_entry_price_cents'] or limit<(1 if self.cfg.get('use_rules') else self.cfg['min_entry_price_cents']):
                 self.rejected['execution margin or price cap']+=1;continue
@@ -369,6 +379,10 @@ class Portfolio:
             assumptions={'latencyMs':self.latency*1000,'cancelLatencyMs':self.cancel_latency*1000,
                          'depthFraction':self.depth_fraction,'slippageCents':self.slip*100},
             dataStatus='recorded' if self.evidence['book'] and self.evidence['signal'] else 'insufficient_data')
+        if self.rejected.get('no qualified signal group yet') and not self.trades:
+            result['caveats'].insert(0,'No signal group had qualified on settled evidence at any point in this window, so, as live trading would have, the replay placed no trades. Keep data collection or Practice running; the Evidence page shows progress. Turning off the qualified-edge rule replays the raw heuristic scores instead.')
+        elif self.cfg.get('require_qualified_edge',True):
+            result['caveats'].insert(0,'Qualified-edge rule on, as live: entries need a signal group that qualified on settled evidence recorded before that moment, and are priced from its calibrated edge.')
         if result['dataStatus']=='insufficient_data':
             result['caveats'].insert(0,'Not enough recorded order-book evidence. Leave main data collection enabled with a connected US account. Older signal-only records cannot reconstruct historical fills.')
         return result

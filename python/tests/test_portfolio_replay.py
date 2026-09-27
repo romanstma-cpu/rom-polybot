@@ -36,10 +36,13 @@ def staged(ticker, event_id, at):
 
 
 def config(**patch):
+    # These tests pin fill, fee, cap and payout mechanics. The qualified-edge
+    # rule would stop every one of these trades for lack of settled history,
+    # exactly as live does; its own tests are at the end of this file.
     base=dict(main_paper_bankroll_usd=100, min_size_fraction=.1,
         max_size_fraction=.1, hard_max_position_usd=6.2, min_cash_reserve_fraction=0,
         trade_scan_interval=5, position_poll_interval=5, order_expiration_sec=1,
-        order_style='limit_cross')
+        order_style='limit_cross', require_qualified_edge=False)
     base.update(patch)
     return merge_with_defaults(base)
 
@@ -192,3 +195,70 @@ def test_recorder_copies_payload_and_flushes_to_isolated_database(tmp_path, monk
 
 def test_bad_assumption_rejected():
     with pytest.raises(ValueError): replay(config(), [], depth_fraction=2)
+
+
+# --- the replay applies the qualified-edge rule the way live does ------------
+
+import signal_calibration
+
+
+def test_default_rule_trades_nothing_without_a_qualified_group():
+    """Live waits until a signal group qualifies; so must the backtest. The
+    heuristic score alone used to trade here."""
+    result=replay(config(require_qualified_edge=True),
+                  evidence()+[event('settlement', {'yes_payout': 1}, 3)])
+    assert result['filledOrders']==0 and result['n']==0
+    assert result['rejections']['no qualified signal group yet']>0
+
+
+def _qualified(monkeypatch, edge):
+    def fit(_events, asof):
+        return {'bins': {'whale-group': {'lowerProbability': .8}}, 'asof': asof,
+                'report': {}}
+    def calibrated(_sig, _source, _limit, _at, _model):
+        if edge is None:
+            raise ValueError('no bucket for this signal')
+        return edge
+    monkeypatch.setattr(signal_calibration, 'fit', fit)
+    monkeypatch.setattr(signal_calibration, 'calibrated_edge', calibrated)
+    monkeypatch.setattr(signal_calibration, 'capital_priority', lambda *_a: 1.0)
+
+
+def test_a_qualified_group_trades_on_its_calibrated_edge(monkeypatch):
+    _qualified(monkeypatch, edge=12.0)
+    result=replay(config(require_qualified_edge=True),
+                  evidence()+[event('settlement', {'yes_payout': 1}, 3)])
+    assert result['n']==1
+
+
+def test_a_signal_outside_every_qualified_group_is_refused(monkeypatch):
+    _qualified(monkeypatch, edge=None)
+    result=replay(config(require_qualified_edge=True),
+                  evidence()+[event('settlement', {'yes_payout': 1}, 3)])
+    assert result['n']==0
+    assert result['rejections']['no qualified edge for this signal group']==1
+
+
+def test_a_calibrated_edge_below_the_threshold_is_refused(monkeypatch):
+    """The heuristic says 90 vs 60 (30 points); the calibrated edge says 1."""
+    _qualified(monkeypatch, edge=1.0)
+    result=replay(config(require_qualified_edge=True),
+                  evidence()+[event('settlement', {'yes_payout': 1}, 3)])
+    assert result['n']==0
+    assert result['rejections']['execution margin or price cap']==1
+
+
+def test_an_empty_backtest_says_why():
+    result=replay(config(require_qualified_edge=True),
+                  evidence()+[event('settlement', {'yes_payout': 1}, 3)])
+    assert 'No signal group had qualified' in result['caveats'][0]
+    assert 'Qualified-edge rule' not in ' '.join(result['caveats'])
+
+
+def test_a_qualified_backtest_says_which_rule_it_ran(monkeypatch):
+    _qualified(monkeypatch, edge=12.0)
+    result=replay(config(require_qualified_edge=True),
+                  evidence()+[event('settlement', {'yes_payout': 1}, 3)])
+    assert result['caveats'][0].startswith('Qualified-edge rule on')
+    off=replay(config(), evidence()+[event('settlement', {'yes_payout': 1}, 3)])
+    assert not any('Qualified-edge' in c for c in off['caveats'])

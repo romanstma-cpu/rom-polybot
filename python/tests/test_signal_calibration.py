@@ -148,9 +148,15 @@ def test_every_live_sizing_mode_requires_qualified_edge(monkeypatch, sizing_mode
 
 
 def test_replay_kelly_does_not_train_on_later_settlement():
-    result=replay(config(sizing_mode='kelly'),evidence()+[event('settlement',{'yes_payout':1},3)])
+    later=evidence()+[event('settlement',{'yes_payout':1},3)]
+    # Kelly alone still prices from calibration, and finds no group.
+    result=replay(config(sizing_mode='kelly',require_qualified_edge=False),later)
     assert result['submittedOrders']==0
-    assert result['rejections']['Kelly calibration unavailable']==1
+    assert result['rejections']['no qualified edge for this signal group']==1
+    # With the qualified-edge rule on, the cycle waits before pricing anything.
+    result=replay(config(sizing_mode='kelly',require_qualified_edge=True),later)
+    assert result['submittedOrders']==0
+    assert result['rejections']['no qualified signal group yet']==1
 
 
 def test_minimum_size_never_increases_kelly_risk():
