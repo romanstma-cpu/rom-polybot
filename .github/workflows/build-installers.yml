@@ -11,6 +11,11 @@ name: Build Installers
 # change can be tested before it is trusted. This workflow does not wire up
 # auto-update.
 #
+# To release: Actions → Build Installers → Run workflow, on master, with the
+# version from package.json typed into "Release version". That builds both
+# installers and, once both pass, creates the v<version> tag on the commit it
+# built and publishes the release. Pushing a v<version> tag does the same.
+#
 # The Windows installer used to be built by hand on a personal machine. Built
 # here, both platforms come from a tagged, reproducible run, which is also what
 # SignPath requires before it will sign anything.
@@ -31,7 +36,16 @@ on:
       - "python/requirements*.txt"
       - "python/*.spec"
       - "scripts/build-python.mjs"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      release:
+        description: >-
+          Release version: type the version in package.json (for example
+          2.37.0) to tag master and publish it. Leave empty for a test build
+          that publishes nothing.
+        required: false
+        type: string
+        default: ""
 
 # contents: write is required to create the release and upload installer assets.
 permissions:
@@ -193,30 +207,54 @@ jobs:
             release/SHA256SUMS-windows-x64.txt
           retention-days: 7
 
-  # A version tag publishes both installers as one release, only after both
-  # platforms built, passed the gate and self-tested, and only when the tag
-  # matches package.json and the version has release notes. A pull request
-  # that changes this pipeline runs every step here except publishing.
+  # A version tag, or a manual run with a release version, publishes both
+  # installers as one release, only after both platforms built, passed the
+  # gate and self-tested, and only when the version matches package.json and
+  # has release notes. A manual release must run on master and the version
+  # must not be released yet; the tag is created on the commit that was built.
+  # A pull request that changes this pipeline runs every step here except
+  # publishing.
   release:
     name: publish-release
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'pull_request'
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') || github.event_name == 'pull_request'
+      || (github.event_name == 'workflow_dispatch' && inputs.release != '')
     needs: [mac, windows]
     runs-on: ubuntu-latest
+    # Two manual releases at once would race for the same tag.
+    concurrency:
+      group: publish-release
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v7
 
       - name: Check the tag, version and release notes agree
         id: version
         shell: bash
+        env:
+          REQUESTED: ${{ inputs.release }}
         run: |
           VERSION=$(node -p "require('./package.json').version")
+          PUBLISH_RELEASE=false
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             test "${GITHUB_REF_NAME}" = "v${VERSION}" || {
               echo "Tag ${GITHUB_REF_NAME} does not match package.json ${VERSION}"; exit 1; }
+            PUBLISH_RELEASE=true
+          elif [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            REQUESTED=$(printf %s "${REQUESTED}" | tr -d "[:space:]"); REQUESTED="${REQUESTED#v}"
+            test "${GITHUB_REF}" = "refs/heads/master" || {
+              echo "Releases are made from master, not ${GITHUB_REF_NAME}"; exit 1; }
+            test "${REQUESTED}" = "${VERSION}" || {
+              echo "Release version ${REQUESTED} does not match package.json ${VERSION}"; exit 1; }
+            if git ls-remote --exit-code --tags origin "refs/tags/v${VERSION}" >/dev/null; then
+              echo "v${VERSION} is already released; bump the version in package.json first"; exit 1
+            fi
+            PUBLISH_RELEASE=true
           fi
           test -s "docs/release-notes/release-notes-${VERSION}.md" || {
             echo "docs/release-notes/release-notes-${VERSION}.md is missing"; exit 1; }
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "publish=${PUBLISH_RELEASE}" >> "$GITHUB_OUTPUT"
 
       - uses: actions/download-artifact@v7
         with:
@@ -241,11 +279,15 @@ jobs:
           test -f "ROM.PolyBot-Setup-${{ steps.version.outputs.version }}.exe"
           test -f "ROM.PolyBot-${{ steps.version.outputs.version }}-arm64.dmg"
 
+      # On a manual release the tag does not exist yet, so it is created here
+      # at the commit both installers were built from. A tag made with this
+      # workflow's token does not start another run.
       - name: Publish the release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: steps.version.outputs.publish == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
+          tag_name: v${{ steps.version.outputs.version }}
+          target_commitish: ${{ github.sha }}
           name: ROM PolyBot ${{ steps.version.outputs.version }}
           body_path: docs/release-notes/release-notes-${{ steps.version.outputs.version }}.md
           prerelease: false
