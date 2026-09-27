@@ -17,6 +17,9 @@ name: Build Installers
 on:
   push:
     branches: [main, build]
+    # A version tag (v2.36.0) builds both installers and publishes them
+    # together as that version's release: see the release job at the end.
+    tags: ['v*']
   # A pull request that changes this file, the dependencies, or the backend
   # bundle runs it as a dry run: both installers are built and tested,
   # nothing is published. (electron-builder's config lives in package.json.)
@@ -35,7 +38,9 @@ permissions:
   contents: write
 
 env:
-  PUBLISH: ${{ github.event_name == 'push' }}
+  # Branch pushes publish per-run CI prereleases. Version tags publish one
+  # versioned release from the release job instead.
+  PUBLISH: ${{ github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
   mac:
@@ -85,7 +90,11 @@ jobs:
           fi
           FILE=$(find release -maxdepth 1 -name '*-arm64.dmg' -type f | head -1)
           test -n "$FILE"
-          shasum -a 256 "$FILE" > release/SHA256SUMS-mac-apple-silicon.txt
+          # Same format as Windows and the site's checksum files: upper-case
+          # hash, two spaces, and the name GitHub gives the asset.
+          HASH=$(shasum -a 256 "$FILE" | cut -d' ' -f1 | tr a-f A-F)
+          echo "$HASH  $(basename "$FILE" | tr ' ' '.')" > release/SHA256SUMS-mac-apple-silicon.txt
+          cat release/SHA256SUMS-mac-apple-silicon.txt
 
       - name: Publish installer to a GitHub Release
         if: env.PUBLISH == 'true'
@@ -183,3 +192,66 @@ jobs:
             release/*-Setup-*.exe
             release/SHA256SUMS-windows-x64.txt
           retention-days: 7
+
+  # A version tag publishes both installers as one release, only after both
+  # platforms built, passed the gate and self-tested, and only when the tag
+  # matches package.json and the version has release notes. A pull request
+  # that changes this pipeline runs every step here except publishing.
+  release:
+    name: publish-release
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'pull_request'
+    needs: [mac, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check the tag, version and release notes agree
+        id: version
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            test "${GITHUB_REF_NAME}" = "v${VERSION}" || {
+              echo "Tag ${GITHUB_REF_NAME} does not match package.json ${VERSION}"; exit 1; }
+          fi
+          test -s "docs/release-notes/release-notes-${VERSION}.md" || {
+            echo "docs/release-notes/release-notes-${VERSION}.md is missing"; exit 1; }
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v7
+        with:
+          path: dist-release
+          merge-multiple: true
+
+      - name: Rename to the published names and verify both checksums
+        shell: bash
+        working-directory: dist-release
+        run: |
+          # The checksum files name the assets as GitHub will (spaces become
+          # dots), so rename first and check the files against them.
+          for f in *\ *; do [ -e "$f" ] && mv "$f" "$(echo "$f" | tr ' ' '.')"; done
+          ls -l
+          for sums in SHA256SUMS-windows-x64.txt SHA256SUMS-mac-apple-silicon.txt; do
+            test -s "$sums"
+            while read -r hash name; do
+              actual=$(sha256sum "$name" | cut -d' ' -f1 | tr a-f A-F)
+              test "$actual" = "$hash" || { echo "$name does not match $sums"; exit 1; }
+            done < "$sums"
+          done
+          test -f "ROM.PolyBot-Setup-${{ steps.version.outputs.version }}.exe"
+          test -f "ROM.PolyBot-${{ steps.version.outputs.version }}-arm64.dmg"
+
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ROM PolyBot ${{ steps.version.outputs.version }}
+          body_path: docs/release-notes/release-notes-${{ steps.version.outputs.version }}.md
+          prerelease: false
+          make_latest: true
+          files: |
+            dist-release/ROM.PolyBot-Setup-${{ steps.version.outputs.version }}.exe
+            dist-release/ROM.PolyBot-${{ steps.version.outputs.version }}-arm64.dmg
+            dist-release/SHA256SUMS-windows-x64.txt
+            dist-release/SHA256SUMS-mac-apple-silicon.txt
