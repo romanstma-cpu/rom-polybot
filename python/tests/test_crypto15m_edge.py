@@ -543,3 +543,73 @@ def test_evidence_sizing_starts_the_replay_even_with_the_gate_off():
     cfg = dict(config.merge_with_defaults({}), crypto15m_require_proven_edge=False)
     assert not c15t._needs_evidence(cfg)
     assert c15t._needs_evidence(dict(cfg, crypto15m_sizing_mode="evidence"))
+
+
+# --- the gate's fill: a quote that had only just appeared may be gone -------
+
+def _ticks(*rows):
+    """(minute, up_prob, up_ask) per tick; resolves UP."""
+    out = []
+    for minute, mid, ask in rows:
+        out.append({
+            "ticker": "P", "asset": "BTC", "up_won": 1,
+            "sig_close": "2026-09-10T12:15:00Z", "mins_left": 4.5 - minute,
+            "up_prob": mid, "yes_bid": round(mid - 0.01, 4), "yes_ask": ask,
+            "up_ask": ask, "no_ask": round(1 - mid + 0.01, 4), "delta_pct": 0.01,
+            "observed_at": f"2026-09-10 12:1{minute}:00",
+        })
+    return {"P": out}
+
+
+def _fill(ticks, cfg, **kw):
+    trades, _n, _m = replay._simulate(ticks, cfg, contracts=1, **kw)
+    return trades
+
+
+def test_the_gates_fill_pays_the_worse_of_this_tick_and_the_last():
+    # Minute 0 is no signal (mid 0.78 < 0.80) but shows a 92c ask; minute 1
+    # signals at an 89c ask that had just appeared.
+    ticks = _ticks((0, 0.78, 0.92), (1, 0.88, 0.89))
+    assert _fill(ticks, _exit_cfg())[0]["costCents"] == 89.0
+    assert _fill(ticks, _exit_cfg(), pessimistic=True)[0]["costCents"] == 92.0
+
+
+def test_a_fill_the_cap_forbids_is_retried_at_a_later_tick():
+    ticks = _ticks((0, 0.78, 0.97), (1, 0.88, 0.89), (2, 0.89, 0.90))
+    t = _fill(ticks, _exit_cfg(), pessimistic=True)[0]
+    # 97c breaks the 95c cap at minute 1; minute 2 fills at max(90, 89).
+    assert t["costCents"] == 90.0 and t["at"].endswith("12:12:00")
+
+
+def test_an_old_prior_tick_does_not_count():
+    ticks = _ticks((0, 0.78, 0.92), (1, 0.88, 0.89))
+    ticks["P"][0]["observed_at"] = "2026-09-10 12:08:30"   # 2.5 minutes before
+    assert _fill(ticks, _exit_cfg(), pessimistic=True)[0]["costCents"] == 89.0
+
+
+def test_a_model_fill_past_its_edge_ceiling_is_skipped():
+    cfg = _exit_cfg(crypto15m_direction_mode="model", crypto15m_model_autopause=False,
+                    crypto15m_model_min_prob=0.97, crypto15m_entry_max=0.99,
+                    crypto15m_model_max_book_gap_cents=0.0)
+    ticks = _ticks((0, 0.78, 0.98), (1, 0.88, 0.90))
+    for t in ticks["P"]:
+        t["model_prob"] = 0.99           # no spot recorded: the replay keeps it
+    assert _fill(ticks, cfg)[0]["costCents"] == 90.0
+    # At 98c a 99c model has under 2c left after the fee: live would not buy.
+    assert _fill(ticks, cfg, pessimistic=True) == []
+
+
+def test_the_gate_and_the_backtests_verdict_use_the_pessimistic_fill(fresh_db, monkeypatch):
+    calls = []
+    real = replay._simulate
+
+    def spy(*a, **kw):
+        calls.append(kw.get("pessimistic", False))
+        return real(*a, **kw)
+    monkeypatch.setattr(replay, "_simulate", spy)
+    ev.evaluate(_favorite_cfg(), "mainnet")
+    assert calls == [True]
+    calls.clear()
+    out = replay.replay(_favorite_cfg(), env="mainnet", since_days=14)
+    assert calls == [False, True]      # the displayed run, then the gate's
+    assert any("gate's stricter fill" in c for c in out["caveats"])
