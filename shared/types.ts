@@ -124,7 +124,9 @@ export interface TraderConfig {
   crypto15mWsBook?: boolean;
   crypto15mUseRules?: boolean;
   crypto15mRules?: RuleCondition[];
-  crypto15mSizingMode?: 'fixed' | 'balance_pct';
+  crypto15mSizingMode?: 'fixed' | 'balance_pct' | 'evidence';
+  /** Share of the Kelly stake bet in 'evidence' sizing (0.25 = quarter Kelly). */
+  crypto15mKellyFraction?: number;
   crypto15mOrderSize?: number;
   crypto15mBalancePct?: number;
   crypto15mMaxLossPct?: number;
@@ -578,7 +580,7 @@ export interface Crypto15mStats {
 }
 
 export interface Crypto15mSizing {
-  mode: 'fixed' | 'balance_pct';
+  mode: 'fixed' | 'balance_pct' | 'evidence';
   balancePct: number;
   maxLossPct: number;
   balanceUsd: number;
@@ -602,6 +604,12 @@ export interface Crypto15mEvidence {
   conservativeEvCents?: number | null;
   lowerEvCents?: number | null;
   halvesPositive?: boolean | null;
+  lossRateHi?: number | null;
+  meanWinCents?: number | null;
+  meanLossCents?: number | null;
+  kellyFraction?: number;
+  byAsset?: Record<string, { n: number; evCents: number; upperEvCents: number | null; excluded: boolean }>;
+  excludedAssets?: string[];
   windows?: number;
   evaluatedAt?: number;
 }

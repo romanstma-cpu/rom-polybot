@@ -163,6 +163,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "crypto15m_hours_end_utc": 24,
     "crypto15m_enabled": False,
     "crypto15m_sizing_mode": "fixed",
+    "crypto15m_kelly_fraction": 0.25,
     "crypto15m_order_size": 5,
     "crypto15m_balance_pct": 0.02,
     "crypto15m_max_loss_pct": 0.0,
@@ -650,8 +651,10 @@ def _validate_config(cfg: dict[str, Any]) -> dict[str, Any]:
     cfg["crypto15m_take_profit_total"] = _clampf(
         cfg.get("crypto15m_take_profit_total"), 0.0, 1e9, d["crypto15m_take_profit_total"],
     )
-    if cfg.get("crypto15m_sizing_mode") not in ("fixed", "balance_pct"):
+    if cfg.get("crypto15m_sizing_mode") not in ("fixed", "balance_pct", "evidence"):
         cfg["crypto15m_sizing_mode"] = d["crypto15m_sizing_mode"]
+    cfg["crypto15m_kelly_fraction"] = _clampf(
+        cfg.get("crypto15m_kelly_fraction"), 0.01, 1.0, d["crypto15m_kelly_fraction"])
     cfg["crypto15m_balance_pct"] = _clampf(cfg.get("crypto15m_balance_pct"), 0.0, 1.0, d["crypto15m_balance_pct"])
     cfg["crypto15m_max_loss_pct"] = _clampf(cfg.get("crypto15m_max_loss_pct"), 0.0, 1.0, d["crypto15m_max_loss_pct"])
     cfg["crypto15m_streak_sizing"] = bool(

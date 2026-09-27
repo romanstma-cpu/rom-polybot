@@ -214,6 +214,12 @@ export function Crypto15mPage() {
         {enabled && status?.evidenceRequired && status.evidence?.qualified && (
           <div className="mt-2 text-[11px] text-rom-win">
             Edge {status.evidence.reason}.
+            {(status.evidence.excludedAssets?.length ?? 0) > 0 && (
+              <span className="text-rom-warn">
+                {' '}Left out because they lost money in the replay:{' '}
+                {status.evidence.excludedAssets!.join(', ')}.
+              </span>
+            )}
           </div>
         )}
         {!enabled && status?.evidenceRequired && status.evidence && (
@@ -735,11 +741,13 @@ function StrategySettings({
             />
             <SelectField
               label="Bet size by" value={sizingMode}
-              options={[['fixed', 'Fixed contracts'], ['balance_pct', '% of balance']]}
-              hint="Buy a fixed number of contracts, or spend a % of your balance each bet."
-              onCommit={(v) => void update({ crypto15mSizingMode: v as 'fixed' | 'balance_pct' })}
+              options={[['fixed', 'Fixed contracts'], ['balance_pct', '% of balance'], ['evidence', 'Proven edge (Kelly)']]}
+              hint="Buy a fixed number of contracts, spend a % of your balance each bet, or size by the edge your recorded windows prove (nothing until they prove one)."
+              onCommit={(v) => void update({ crypto15mSizingMode: v as 'fixed' | 'balance_pct' | 'evidence' })}
             />
-            {sizingMode === 'balance_pct' ? (
+            {sizingMode === 'evidence' ? (
+              <KellyField value={num('crypto15mKellyFraction', 0.25)} onCommit={(v) => void update({ crypto15mKellyFraction: v })} />
+            ) : sizingMode === 'balance_pct' ? (
               <NumField
                 label="Per bet" suffix="% bal" min={0.1} max={100} step={0.1}
                 value={+(num('crypto15mBalancePct', 0.02) * 100).toFixed(2)}
@@ -982,11 +990,13 @@ function StrategySettings({
         />
         <SelectField
           label="Bet size by" value={sizingMode}
-          options={[['fixed', 'Fixed contracts'], ['balance_pct', '% of balance']]}
-          hint="Buy a fixed number of contracts, or spend a % of your balance each bet."
-          onCommit={(v) => void update({ crypto15mSizingMode: v as 'fixed' | 'balance_pct' })}
+          options={[['fixed', 'Fixed contracts'], ['balance_pct', '% of balance'], ['evidence', 'Proven edge (Kelly)']]}
+          hint="Buy a fixed number of contracts, spend a % of your balance each bet, or size by the edge your recorded windows prove (nothing until they prove one)."
+          onCommit={(v) => void update({ crypto15mSizingMode: v as 'fixed' | 'balance_pct' | 'evidence' })}
         />
-        {sizingMode === 'balance_pct' ? (
+        {sizingMode === 'evidence' ? (
+          <KellyField value={num('crypto15mKellyFraction', 0.25)} onCommit={(v) => void update({ crypto15mKellyFraction: v })} />
+        ) : sizingMode === 'balance_pct' ? (
           <NumField
             label="Per bet" suffix="% bal" min={0.1} max={100} step={0.1}
             value={+(num('crypto15mBalancePct', 0.02) * 100).toFixed(2)}
@@ -1086,7 +1096,7 @@ function StrategySettings({
 
 function SizingPreview({ sizing, mode, orderSize }: {
   sizing: Crypto15mSizing | null;
-  mode: 'fixed' | 'balance_pct';
+  mode: 'fixed' | 'balance_pct' | 'evidence';
   orderSize: number;
 }) {
   if (!sizing) return null;
@@ -1094,7 +1104,7 @@ function SizingPreview({ sizing, mode, orderSize }: {
   const known = balanceUsd > 0;
 
   const belowMin = estContracts >= 1 && estContracts < MIN_CONTRACTS;
-  const balanceLimited = known && (mode === 'balance_pct' || estContracts < orderSize);
+  const balanceLimited = known && (mode !== 'fixed' || estContracts < orderSize);
   return (
     <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-rom-border bg-rom-surface2 px-3 py-2 text-[11px]">
       <span className="inline-flex items-center gap-1.5 font-semibold uppercase tracking-wider text-rom-dim">
@@ -1422,6 +1432,17 @@ function Foot({ label, value }: { label: string; value: string }) {
       <div className="text-[11px] uppercase tracking-wider text-rom-dim">{label}</div>
       <div className="mt-0.5 font-mono text-white">{value}</div>
     </div>
+  );
+}
+
+function KellyField({ value, onCommit }: { value: number; onCommit: (v: number) => void }) {
+  return (
+    <NumField
+      label="Kelly share" suffix="×" min={0.05} max={1} step={0.05}
+      value={value}
+      hint="Bet this share of the growth-optimal (Kelly) stake, computed from your recorded windows with the loss rate at the top of its likely range. 0.25 (quarter Kelly) gives up little growth for much smaller swings; 1 is full Kelly and swings hard. Max loss / bet and the balance caps still apply."
+      onCommit={(v) => onCommit(Math.max(0.01, Math.min(1, v)))}
+    />
   );
 }
 

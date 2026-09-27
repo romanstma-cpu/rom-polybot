@@ -68,7 +68,7 @@ const FIELD_TYPES: Readonly<Record<string, FieldType>> = {
   crypto15mImbalanceGate: 'boolean', crypto15mImbalanceGateMin: 'number',
   crypto15mIndicatorDetect: 'boolean', crypto15mWsBook: 'boolean', crypto15mUseRules: 'boolean',
   crypto15mRules: 'rules',
-  crypto15mSizingMode: 'string-enum', crypto15mOrderSize: 'number', crypto15mBalancePct: 'number',
+  crypto15mSizingMode: 'string-enum', crypto15mOrderSize: 'number', crypto15mBalancePct: 'number', crypto15mKellyFraction: 'number',
   crypto15mMaxLossPct: 'number', crypto15mStreakSizing: 'boolean', crypto15mStreakLossPct: 'number',
   crypto15mStreakWinPct: 'number', crypto15mStreakMaxMult: 'number', crypto15mMaxConcurrent: 'number',
   crypto15mDailyLossLimit: 'number', crypto15mLifetimeLossLimitPct: 'number',
@@ -105,7 +105,7 @@ const NULLABLE_ARRAY_KEYS: ReadonlySet<string> = new Set([
 /** String-valued sets (enums). Unknown values are rejected, not coerced. */
 const STRING_ENUMS: Readonly<Record<string, ReadonlySet<string>>> = {
   sizingMode: new Set(['percent', 'contracts', 'kelly']),
-  crypto15mSizingMode: new Set(['fixed', 'balance_pct']),
+  crypto15mSizingMode: new Set(['fixed', 'balance_pct', 'evidence']),
   crypto15mDirectionMode: new Set(['favorite', 'contrarian', 'model']),
   crypto15mEntryStyle: new Set(['maker', 'taker']),
   crypto15mInterval: new Set(['5m', '15m', 'hourly']),

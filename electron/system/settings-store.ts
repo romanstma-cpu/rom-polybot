@@ -153,6 +153,7 @@ export const DEFAULT_CONFIG: TraderConfig = {
   crypto15mModelMinProb: 0.97,
   crypto15mModelMinEdgeCents: 2.0,
   crypto15mModelTailDof: 5,
+  crypto15mKellyFraction: 0.25,
   crypto15mRequireProvenEdge: true,
   crypto15mModelFinalMinute: true,
   crypto15mModelAutopause: true,
