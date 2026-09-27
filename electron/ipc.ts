@@ -95,8 +95,10 @@ export function registerIpc(): void {
   ipcMain.handle('app:version', () => app.getVersion());
   ipcMain.handle('app:checkForUpdates', async () => {
     const currentVersion = app.getVersion();
-    // The repository also publishes ROM Trader and Mac CI releases. GitHub's
-    // generic /latest endpoint therefore does not mean "latest PolyBot".
+    // From 2.36.0 PolyBot releases live in rom-polybot: one release per
+    // version, tagged v<version>, carrying both installers. Branch builds
+    // publish CI prereleases there too, so the tag and the asset name must
+    // agree before a release counts.
     const assetPattern = process.platform === 'darwin'
       ? /^ROM[. ]PolyBot-(\d+\.\d+\.\d+)-arm64\.dmg$/i
       : /^ROM[. ]PolyBot-Setup-(\d+\.\d+\.\d+)\.exe$/i;
@@ -107,7 +109,7 @@ export function registerIpc(): void {
     const releases: Release[] = [];
     for (let page = 1; page <= 3; page++) {
       const response = await fetch(
-        `https://api.github.com/repos/romanstma-cpu/rom-apps/releases?per_page=100&page=${page}`,
+        `https://api.github.com/repos/romanstma-cpu/rom-polybot/releases?per_page=100&page=${page}`,
         {
           headers: {
             Accept: 'application/vnd.github+json',
@@ -137,7 +139,7 @@ export function registerIpc(): void {
       for (const asset of release.assets) {
         const match = typeof asset?.name === 'string' ? asset.name.match(assetPattern) : null;
         if (!match) continue;
-        if (process.platform === 'darwin' ? !/^polybot-mac-\d+$/.test(tag) : tag !== `v${match[1]}`) continue;
+        if (tag !== `v${match[1]}`) continue;
         if (!selected || compare(match[1], selected.version) > 0) {
           selected = { release, version: match[1] };
         }
@@ -153,9 +155,9 @@ export function registerIpc(): void {
         && [0, 1, 2].slice(0, index).every((prior) => latest[prior] === current[prior]);
     });
     const reportedUrl = typeof selected.release.html_url === 'string' ? selected.release.html_url : '';
-    const releaseUrl = reportedUrl.startsWith('https://github.com/romanstma-cpu/rom-apps/releases/')
+    const releaseUrl = reportedUrl.startsWith('https://github.com/romanstma-cpu/rom-polybot/releases/')
       ? reportedUrl
-      : `https://github.com/romanstma-cpu/rom-apps/releases/tag/${encodeURIComponent(String(selected.release.tag_name))}`;
+      : `https://github.com/romanstma-cpu/rom-polybot/releases/tag/${encodeURIComponent(String(selected.release.tag_name))}`;
     return {
       currentVersion,
       latestVersion,
