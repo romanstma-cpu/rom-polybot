@@ -23,6 +23,15 @@ international exchange data. Crypto strategies need US-listed markets.
 
 Original third-party copyright notices are retained in LICENSE as required.
 
+## Releasing
+1. Set the new version with `npm version <version> --no-git-tag-version`, add
+   `docs/release-notes/release-notes-<version>.md`, and merge both to master.
+2. On GitHub, open Actions → Build Installers → Run workflow, keep `master`,
+   and type the version into "Release version". Once both installers are built
+   and tested, the run tags that commit `v<version>` and publishes the release.
+3. Installs on 2.35.11 and earlier look for updates in rom-apps, so run
+   "Mirror a PolyBot release for older installs" there with the same version.
+
 ## Verification
 The full 2,003-test Python suite completes. The 23 Electron script-arming checks pass, and
 the packaged Windows app has been opened and its API screen inspected.
