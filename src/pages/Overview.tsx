@@ -9,6 +9,7 @@ import { MainActivity } from '../components/MainActivity';
 import { useStrategyActivity } from '../state/StrategyActivity';
 import { OrderRecovery } from '../components/OrderRecovery';
 import { TradingCheck } from '../components/TradingCheck';
+import { TradeDiagnosis } from '../components/TradeDiagnosis';
 
 export function OverviewPage({ onNav }: { onNav: (page: PageId) => void }) {
   const { backend, account, config, positions } = useApp();
@@ -50,6 +51,7 @@ export function OverviewPage({ onNav }: { onNav: (page: PageId) => void }) {
           every engine, and this is the page the user lands on. */}
       <OrderRecovery intents={blockedIntents} />
     <div className="mx-auto max-w-6xl space-y-6">
+      <TradeDiagnosis onNav={onNav} />
       <div className="terminal-command terminal-command-detailed">
         <div className="mb-6 flex flex-wrap items-center justify-between gap-3 border-b border-rom-borderHi pb-4 text-xs text-rom-muted">
           <span className="flex items-center gap-2 font-mono uppercase tracking-widest"><ScanLine className="h-4 w-4 text-rom-purple" />ROM / Strategy terminal</span>
