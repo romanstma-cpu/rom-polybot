@@ -10,7 +10,8 @@ what twenty or thirty wins earn.
 The recorder already logs every window's book and outcome whether or not the
 engine trades, so the evidence exists. This module replays the engine's own
 entry rule over the last EVIDENCE_DAYS of it (the same simulation as the
-Crypto tab's backtest, one contract per window, plus a cent of slippage) and
+Crypto tab's backtest, one contract per window, plus a cent of slippage,
+each fill paying the worse of the ask at its tick and the tick before) and
 qualifies the configuration only when all of these hold:
 
   * at least MIN_TRADES replayed trades over at least MIN_DAYS UTC days;
@@ -232,7 +233,8 @@ def evaluate(cfg: dict, env: str, *, since_days: int = EVIDENCE_DAYS) -> dict:
     run["crypto15m_model_autopause"] = False
     by_window = replay.load_windows(
         env=env, interval=crypto15m._interval(run), since_days=since_days)
-    trades, _windows, _misses = replay._simulate(by_window, run, contracts=1)
+    trades, _windows, _misses = replay._simulate(
+        by_window, run, contracts=1, pessimistic=True)
     verdict = assess(trades, since_days=since_days)
     verdict["windows"] = len(by_window)
     return verdict

@@ -168,6 +168,27 @@ def _quote_stable_secs(ticks: list[dict], i: int, side: str) -> float:
     return t_i - stable_since
 
 
+# Ticks are ~25s apart. A price seen at one tick and not the one before may
+# be a quote that had just appeared and was gone before an order could land;
+# the gate's pessimistic fill charges the worse of the two.
+PRIOR_TICK_MAX_GAP_SECS = 60.0
+
+
+def _prior_ask(ticks: list[dict], i: int, side: str) -> Optional[float]:
+    """The side's ask at the tick before i, if it is recent enough to count."""
+    if i <= 0:
+        return None
+    t_i, t_p = _tick_epoch(ticks[i]), _tick_epoch(ticks[i - 1])
+    if t_i is None or t_p is None or not 0 <= t_i - t_p <= PRIOR_TICK_MAX_GAP_SECS:
+        return None
+    return _exec_ask(ticks[i - 1], side)
+
+
+def _pessimistic_cost(ticks: list[dict], i: int, side: str, cost: float) -> float:
+    prior = _prior_ask(ticks, i, side)
+    return max(cost, prior) if prior is not None else cost
+
+
 def _latency_fill(
     ticks: list[dict], i: int, side: str, a0: float,
     latency_secs: float, tol: float,
@@ -280,7 +301,15 @@ def load_windows(env: str = "mainnet", interval: str = "15m",
 def _simulate(
     by_window: dict[str, list[dict]], cfg: dict, *, contracts: int = 1,
     stable_secs: float = 0.0, latency_secs: float = 0.0, slip_tol: float = 0.0,
+    pessimistic: bool = False,
 ) -> tuple[list[dict], int, int]:
+    """Replay the entry rule over recorded windows.
+
+    `pessimistic` is the evidence gate's fill: each leg pays the worse of its
+    ask at the signal tick and at the tick before, and the entry is dropped
+    at that tick (to be retried later, as live retries) when the price then
+    breaks a cap live trading checks before it sends the order.
+    """
     has_sched = isinstance(cfg.get("crypto15m_hour_configs"), dict)
     trades: list[dict] = []
     n_windows = 0
@@ -318,6 +347,12 @@ def _simulate(
                     continue
                 up_cost = float(asset["upAsk"])
                 down_cost = float(asset["downAsk"])
+                if pessimistic:
+                    up_cost = _pessimistic_cost(ticks, i, "up", up_cost)
+                    down_cost = _pessimistic_cost(ticks, i, "down", down_cost)
+                    cap = float(eff.get("crypto15m_paired_max_combined_cents", 99.0) or 99.0)
+                    if (up_cost + down_cost) * 100.0 > cap + 1e-9:
+                        continue
                 if latency_secs > 0:
                     f_up = _latency_fill(ticks, i, "up", up_cost, latency_secs, slip_tol)
                     f_down = _latency_fill(ticks, i, "down", down_cost, latency_secs, slip_tol)
@@ -350,6 +385,14 @@ def _simulate(
             if not cost or not (0.0 < float(cost) < 1.0):
                 continue
             cost = float(cost)
+            if pessimistic:
+                cost = _pessimistic_cost(ticks, i, side, cost)
+                if cost > crypto15m._const(eff, "entry_max") + 1e-9:
+                    continue
+                if (eff.get("crypto15m_direction_mode") or "").lower() == "model":
+                    ceiling = crypto15m_trader.model_price_ceiling_cents(asset, side, eff)
+                    if ceiling is None or cost * 100.0 > ceiling + 1e-9:
+                        continue
             if stable_secs > 0 and _quote_stable_secs(ticks, i, side) < stable_secs:
                 continue
             fill_idx = i
@@ -464,7 +507,14 @@ def replay(cfg: dict, *, env: str = "mainnet", since_days: int = 60) -> dict:
             "days — the recorder only captures the interval selected on the "
             "Crypto tab, so switch to it there and let data accumulate first."
         ))
-    gate = gate_verdict(trades, contracts)
+    # The verdict is the live gate's: its own fill model, one contract.
+    gate_trades, _gw, _gm = _simulate(by_window, cfg, contracts=1, pessimistic=True)
+    gate = gate_verdict(gate_trades, 1)
+    caveats.append(
+        "The live-gate verdict uses the gate's stricter fill: each entry pays the worse "
+        "of the ask at its tick and the tick before (a quote that had only just "
+        "appeared may be gone before an order lands), and is skipped at that tick when "
+        "that price breaks the entry cap or the model's minimum edge.")
     out = _summarize(trades, contracts, n_windows, caveats)
     out["interval"] = interval
     out["gate"] = gate
