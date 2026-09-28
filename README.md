@@ -3,8 +3,19 @@
 Independent desktop trading app configured for the Polymarket US retail API.
 
 ## Windows app
-Run `release/ROM PolyBot-Setup-2.36.1.exe`, then open ROM PolyBot.
+Run `release/ROM PolyBot-Setup-2.36.2.exe`, then open ROM PolyBot.
 Python and the app runtime are included in the installer.
+
+## In-app updates
+ROM PolyBot checks for stable releases after launch and periodically while open.
+It downloads a matching update in the background and verifies the installer
+against the SHA-256 checksum published with that release. Settings shows the
+installed version, progress, errors, and a retry option. Installing an update
+requires an explicit action so running strategies are not interrupted without
+warning. On Windows the verified installer opens from the app. On Apple Silicon,
+the app opens the verified DMG so you can replace the app in Applications.
+Versions before 2.36.2 need one final manual installer download to gain this
+feature.
 
 ## Development
 Install Node.js and Python 3.12+, run `npm install`, then `npm run dev`.

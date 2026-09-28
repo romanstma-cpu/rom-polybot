@@ -6,6 +6,8 @@ const commands = [
   ['npm', ['run', 'py:test', '--', '-q']],
   ['npm', ['run', 'check:capacity']],
   ['npm', ['run', 'build']],
+  ['node', ['e2e/update-check.e2e.mjs']],
+  ['node', ['e2e/update-download.e2e.mjs']],
 ];
 
 // The visual audit loads dist/, so it must run after the production build.

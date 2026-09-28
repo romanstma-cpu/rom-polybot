@@ -5,6 +5,7 @@ import { Sidebar } from './components/Sidebar';
 import { WorkspaceStatus } from './components/WorkspaceStatus';
 import { AppStateProvider, useApp } from './state/AppStateProvider';
 import { ToastProvider } from './state/ToastProvider';
+import { UpdateProvider, useUpdates } from './state/UpdateProvider';
 import { OnboardingModal } from './pages/Onboarding';
 import { DashboardPage } from './pages/Dashboard';
 import { OverviewPage } from './pages/Overview';
@@ -47,9 +48,11 @@ const PAGE_SHORTCUTS: Record<string, PageId> = {
 export default function App() {
   return (
     <ToastProvider>
-      <AppStateProvider>
-        <StrategyActivityProvider><Shell /></StrategyActivityProvider>
-      </AppStateProvider>
+      <UpdateProvider>
+        <AppStateProvider>
+          <StrategyActivityProvider><Shell /></StrategyActivityProvider>
+        </AppStateProvider>
+      </UpdateProvider>
     </ToastProvider>
   );
 }
@@ -85,12 +88,24 @@ function Shell() {
         <Sidebar page={page} setPage={setPage} />
         <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
           <WorkspaceStatus />
+          <UpdateNotice onOpen={() => setPage('settings')} />
           <div className="min-h-0 flex-1 overflow-hidden bg-rom-radial-r">
             <PageRouter page={page} setPage={setPage} />
           </div>
         </main>
       </div>
       {showOnboarding && <OnboardingModal onDone={() => setPage('api')} />}
+    </div>
+  );
+}
+
+function UpdateNotice({ onOpen }: { onOpen: () => void }) {
+  const { status } = useUpdates();
+  if (status?.phase !== 'ready') return null;
+  return (
+    <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-blue-300/20 bg-blue-400/10 px-8 py-2 text-xs text-blue-100" role="status">
+      <span>ROM PolyBot v{status.latestVersion} is downloaded and verified.</span>
+      <button className="font-semibold text-blue-200 underline underline-offset-2 hover:text-white" onClick={onOpen}>Review update</button>
     </div>
   );
 }

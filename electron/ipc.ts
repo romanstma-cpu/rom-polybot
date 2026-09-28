@@ -19,6 +19,7 @@ import * as accounts from './system/accounts';
 import * as store from './system/settings-store';
 import { validateConfigPatch } from './system/config-validate';
 import { findStrategy, listStrategies } from './system/strategies';
+import { updateService } from './system/update-service';
 
 const ok = <T>(data?: T, message?: string): ActionResult<T> => ({
   ok: true,
@@ -93,79 +94,11 @@ const RUN_ONCE_ACTIONS = new Set([
 
 export function registerIpc(): void {
   ipcMain.handle('app:version', () => app.getVersion());
-  ipcMain.handle('app:checkForUpdates', async () => {
-    const currentVersion = app.getVersion();
-    // From 2.36.0 PolyBot releases live in rom-polybot: one release per
-    // version, tagged v<version>, carrying both installers. Branch builds
-    // publish CI prereleases there too, so the tag and the asset name must
-    // agree before a release counts.
-    const assetPattern = process.platform === 'darwin'
-      ? /^ROM[. ]PolyBot-(\d+\.\d+\.\d+)-arm64\.dmg$/i
-      : /^ROM[. ]PolyBot-Setup-(\d+\.\d+\.\d+)\.exe$/i;
-    type Release = {
-      tag_name?: unknown; html_url?: unknown; published_at?: unknown;
-      draft?: unknown; assets?: { name?: unknown }[];
-    };
-    const releases: Release[] = [];
-    for (let page = 1; page <= 3; page++) {
-      const response = await fetch(
-        `https://api.github.com/repos/romanstma-cpu/rom-polybot/releases?per_page=100&page=${page}`,
-        {
-          headers: {
-            Accept: 'application/vnd.github+json',
-            'User-Agent': `ROM-PolyBot/${currentVersion}`,
-          },
-          signal: AbortSignal.timeout(10_000),
-        },
-      );
-      if (!response.ok) throw new Error(`Update server returned ${response.status}`);
-      const batch = await response.json() as unknown;
-      if (!Array.isArray(batch)) throw new Error('Update server returned an invalid release list');
-      releases.push(...batch as Release[]);
-      if (batch.length < 100) break;
-    }
-    const parts = (value: string) => value.split('.').map(Number);
-    const compare = (a: string, b: string) => {
-      const left = parts(a), right = parts(b);
-      for (let i = 0; i < 3; i++) {
-        if (left[i] !== right[i]) return left[i] - right[i];
-      }
-      return 0;
-    };
-    let selected: { release: Release; version: string } | null = null;
-    for (const release of releases) {
-      if (!release || release.draft || !Array.isArray(release.assets)) continue;
-      const tag = typeof release.tag_name === 'string' ? release.tag_name : '';
-      for (const asset of release.assets) {
-        const match = typeof asset?.name === 'string' ? asset.name.match(assetPattern) : null;
-        if (!match) continue;
-        if (tag !== `v${match[1]}`) continue;
-        if (!selected || compare(match[1], selected.version) > 0) {
-          selected = { release, version: match[1] };
-        }
-      }
-    }
-    if (!selected) throw new Error('No public ROM PolyBot installer was found');
-    const latestVersion = selected.version;
-    const current = parts(currentVersion);
-    const latest = parts(latestVersion);
-    const updateAvailable = [0, 1, 2].some((index) => {
-      if (latest[index] === current[index]) return false;
-      return latest[index] > current[index]
-        && [0, 1, 2].slice(0, index).every((prior) => latest[prior] === current[prior]);
-    });
-    const reportedUrl = typeof selected.release.html_url === 'string' ? selected.release.html_url : '';
-    const releaseUrl = reportedUrl.startsWith('https://github.com/romanstma-cpu/rom-polybot/releases/')
-      ? reportedUrl
-      : `https://github.com/romanstma-cpu/rom-polybot/releases/tag/${encodeURIComponent(String(selected.release.tag_name))}`;
-    return {
-      currentVersion,
-      latestVersion,
-      updateAvailable,
-      releaseUrl,
-      publishedAt: typeof selected.release.published_at === 'string' ? selected.release.published_at : null,
-    };
-  });
+  ipcMain.handle('app:checkForUpdates', () => updateService.check());
+  ipcMain.handle('app:getUpdateStatus', () => updateService.getStatus());
+  ipcMain.handle('app:downloadUpdate', () => updateService.download());
+  ipcMain.handle('app:cancelUpdateDownload', () => updateService.cancelDownload());
+  ipcMain.handle('app:installUpdate', () => updateService.install());
   ipcMain.handle('app:openExternal', async (_e, url: string) => {
     if (typeof url === 'string' && /^(https?|mailto):/i.test(url)) {
       await shell.openExternal(url);

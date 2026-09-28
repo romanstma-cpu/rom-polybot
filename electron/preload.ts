@@ -3,6 +3,7 @@ import type {
   AccountSnapshot, ActionResult, AppState, BackendInfo, BotPosition, CredentialsInput,
   CredentialsState, ROMApi, LogEntry, PnlPoint, PositionFilter, Profile,
   ScannerStats, SignalFilter, SignalRow, StrategyPreset, TraderConfig,
+  UpdateStatus,
 } from '../shared/types';
 
 const sub = <T>(channel: string, cb: (val: T) => void): (() => void) => {
@@ -15,6 +16,11 @@ const api: ROMApi = {
   app: {
     version: () => ipcRenderer.invoke('app:version'),
     checkForUpdates: () => ipcRenderer.invoke('app:checkForUpdates'),
+    getUpdateStatus: () => ipcRenderer.invoke('app:getUpdateStatus'),
+    downloadUpdate: () => ipcRenderer.invoke('app:downloadUpdate'),
+    cancelUpdateDownload: () => ipcRenderer.invoke('app:cancelUpdateDownload'),
+    installUpdate: () => ipcRenderer.invoke('app:installUpdate'),
+    onUpdateStatus: (cb) => sub<UpdateStatus>('app:updateStatus', cb),
     openExternal: (url) => ipcRenderer.invoke('app:openExternal', url),
     showItemInFolder: (p) => ipcRenderer.invoke('app:showItemInFolder', p),
     getUserDataPath: () => ipcRenderer.invoke('app:getUserDataPath'),

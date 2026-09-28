@@ -8,8 +8,8 @@ name: Build Installers
 # artifact storage and do not expire. Any other run — a pull request that
 # changes the pipeline or what gets packaged, or a manual dispatch — keeps the
 # installers as workflow artifacts for a week and publishes nothing, so such a
-# change can be tested before it is trusted. This workflow does not wire up
-# auto-update.
+# change can be tested before it is trusted. The app's in-app updater reads
+# stable releases and verifies the checksum files published by this workflow.
 #
 # To release: Actions → Build Installers → Run workflow, on master, with the
 # version from package.json typed into "Release version". That builds both
@@ -87,9 +87,8 @@ jobs:
           npm run py:dist
           npx electron-builder --mac dmg --arm64
         env:
-          # Build the macOS app unsigned — no Apple Developer cert/secrets needed.
-          # electron-builder ad-hoc signs arm64 so it still launches (right-click
-          # > Open the first time). No-op on Linux/Windows.
+          # Build the macOS app without a Developer ID certificate. This does
+          # not provide signed in-place updates; users open the verified DMG.
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
       - name: Verify packaged backend and installer
@@ -122,7 +121,7 @@ jobs:
           body: >
             Unsigned Apple Silicon installer built from ${{ github.sha }}.
             macOS may require right-click → Open the first time; the arm64 app
-            is ad-hoc signed but is not Apple-notarized.
+            is not Developer ID signed or Apple-notarized.
           files: |
             release/*-arm64.dmg
             release/SHA256SUMS-mac-apple-silicon.txt
@@ -172,6 +171,7 @@ jobs:
         shell: bash
         run: |
           release/win-unpacked/resources/python/rom-polybot-backend.exe --selftest
+          node e2e/update-handoff.e2e.mjs
           FILE=$(find release -maxdepth 1 -name '*-Setup-*.exe' -type f | head -1)
           test -n "$FILE"
           # Same format as the site's SHA256SUMS files: upper-case hash, two

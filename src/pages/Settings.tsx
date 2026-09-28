@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { CheckCircle2, Download, RefreshCw, RotateCcw } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Download, RefreshCw, RotateCcw } from 'lucide-react';
 import type { TraderConfig } from '@shared/types';
 import { useApp } from '../state/AppStateProvider';
 import { useToast } from '../state/ToastProvider';
+import { useUpdates } from '../state/UpdateProvider';
 import { Card, Page, Section, Switch } from '../components/common';
 
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -61,27 +62,6 @@ export function SettingsPage() {
   const { config, refresh, state, backend } = useApp();
   const toast = useToast();
   const [busy, setBusy] = useState(false);
-  const [installedVersion, setInstalledVersion] = useState('');
-  const [checkingUpdate, setCheckingUpdate] = useState(false);
-  const [updateResult, setUpdateResult] = useState<Awaited<ReturnType<typeof window.rom.app.checkForUpdates>>|null>(null);
-  const [updateError, setUpdateError] = useState('');
-
-  useEffect(() => {
-    void window.rom.app.version().then(setInstalledVersion).catch(() => setInstalledVersion('Unavailable'));
-  }, []);
-
-  const checkForUpdates = async (): Promise<void> => {
-    setCheckingUpdate(true);setUpdateError('');
-    try {
-      const result=await window.rom.app.checkForUpdates();
-      setUpdateResult(result);
-    } catch (error: any) {
-      setUpdateResult(null);
-      setUpdateError(error?.message || 'Could not reach the update server.');
-    } finally {
-      setCheckingUpdate(false);
-    }
-  };
 
   const restartBackend = async (): Promise<void> => {
     toast.info('Restarting backend — every engine stops and restarts…');
@@ -105,17 +85,7 @@ export function SettingsPage() {
       title="Settings"
       subtitle="App-level preferences for startup behavior, notifications, and data. Main Strategy, Crypto, and Scripts each have their own controls."
     >
-      <Section title="Version and updates" description="Confirm which ROM PolyBot installation is running and compare it with the latest public release.">
-        <Card>
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div><p className="text-xs font-semibold uppercase tracking-wider text-rom-dim">Installed version</p><p className="mt-1 font-mono text-2xl font-semibold text-white">{installedVersion?`v${installedVersion}`:'Checking…'}</p></div>
-            <button className="rom-btn-default" disabled={checkingUpdate} onClick={()=>void checkForUpdates()}><RefreshCw className={`h-4 w-4 ${checkingUpdate?'animate-spin':''}`}/>{checkingUpdate?'Checking…':'Check for updates'}</button>
-          </div>
-          {updateResult&&<div className={`mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border p-4 ${updateResult.updateAvailable?'border-blue-300/30 bg-blue-400/5':'border-rom-win/30 bg-rom-win/5'}`} aria-live="polite"><div className="flex items-start gap-3">{updateResult.updateAvailable?<Download className="mt-0.5 h-5 w-5 text-blue-300"/>:<CheckCircle2 className="mt-0.5 h-5 w-5 text-rom-win"/>}<div><p className="text-sm font-semibold">{updateResult.updateAvailable?`Version ${updateResult.latestVersion} is available`:'ROM PolyBot is up to date'}</p><p className="mt-1 text-xs text-rom-dim">Running {updateResult.currentVersion} · Latest public release {updateResult.latestVersion}</p></div></div>{updateResult.updateAvailable&&<button className="rom-btn-primary" onClick={()=>void window.rom.app.openExternal(updateResult.releaseUrl)}>Open download page</button>}</div>}
-          {updateError&&<p role="alert" className="mt-4 text-sm text-rom-lossText">{updateError}</p>}
-          <p className="mt-4 text-xs leading-5 text-rom-dim">The version shown here is the executable currently running. If Windows has two installations, this identifies the active one.</p>
-        </Card>
-      </Section>
+      <UpdateControls liveEngineCount={[config.enableTrading, config.crypto15mEnabled, config.scriptsLiveEnabled].filter(Boolean).length} />
 
       <Section
         title="Backend"
@@ -192,6 +162,109 @@ export function SettingsPage() {
 
       <DangerZone busy={busy} setBusy={setBusy} />
     </Page>
+  );
+}
+
+function UpdateControls({ liveEngineCount }: { liveEngineCount: number }) {
+  const { status, busy, actionError, check, download, cancelDownload, install } = useUpdates();
+  const [installedVersion, setInstalledVersion] = useState('');
+  const [confirmInstall, setConfirmInstall] = useState(false);
+  const installDialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(confirmInstall, installDialogRef);
+
+  useEffect(() => {
+    void window.rom.app.version().then(setInstalledVersion).catch(() => setInstalledVersion('Unavailable'));
+  }, []);
+
+  const isMac = /Mac/i.test(navigator.platform);
+  const phase = status?.phase ?? 'idle';
+  const transferring = phase === 'downloading' || phase === 'verifying';
+  const checkDisabled = !!busy || transferring || phase === 'ready';
+  const percent = status?.totalBytes && status.totalBytes > 0
+    ? Math.min(100, Math.round(((status.receivedBytes ?? 0) / status.totalBytes) * 100))
+    : null;
+  const version = status?.latestVersion ? `v${status.latestVersion}` : 'the latest version';
+  const title = phase === 'ready' ? `${version} is ready to install`
+    : phase === 'downloading' ? `Downloading ${version}`
+    : phase === 'verifying' ? 'Verifying download'
+    : phase === 'available' ? `${version} is available`
+    : phase === 'up-to-date' ? 'You are up to date'
+    : phase === 'checking' || busy === 'checking' ? 'Checking for updates…'
+    : phase === 'cancelled' ? 'Download stopped'
+    : phase === 'error' ? 'Update needs attention'
+    : 'Updates are checked automatically';
+  const detail = phase === 'ready'
+    ? isMac
+      ? 'The Apple Silicon download passed its integrity check. Open the disk image, quit PolyBot, and replace it in Applications.'
+      : 'The installer passed its integrity check. You can install it here when you are ready to stop trading.'
+    : phase === 'downloading'
+      ? percent === null ? 'Downloading in the background…' : `${percent}% downloaded`
+    : phase === 'verifying' ? 'Checking the downloaded file before it can be opened.'
+    : phase === 'available' ? 'Starting the background download…'
+    : phase === 'up-to-date' ? `Latest public release: ${version}.`
+    : phase === 'cancelled' ? 'You can start the download again now. PolyBot will also check for updates on its next launch.'
+    : phase === 'error' ? (status?.message || 'Could not complete the update. Try again.')
+    : phase === 'checking' ? 'Looking for the latest public release.'
+    : 'PolyBot checks at startup and every six hours. Downloads happen in the background; installation requires your approval.';
+
+  return (
+    <Section title="Version and updates" description="Keep PolyBot current without visiting the download site.">
+      <Card>
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-rom-dim">Installed version</p>
+            <p className="mt-1 font-mono text-2xl font-semibold text-white">{installedVersion ? `v${installedVersion}` : 'Checking…'}</p>
+          </div>
+          <button className="rom-btn-default" disabled={checkDisabled} onClick={() => void check()}>
+            <RefreshCw className={`h-4 w-4 ${phase === 'checking' || busy === 'checking' ? 'animate-spin' : ''}`} />
+            {phase === 'checking' || busy === 'checking' ? 'Checking…' : 'Check now'}
+          </button>
+        </div>
+
+        <div className={`mt-4 rounded-xl border p-4 ${phase === 'error' ? 'border-rom-loss/35 bg-rom-loss/5' : phase === 'up-to-date' ? 'border-rom-win/30 bg-rom-win/5' : 'border-blue-300/25 bg-blue-400/5'}`} aria-live="polite">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="flex min-w-0 items-start gap-3">
+              {phase === 'error' ? <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-rom-lossText" />
+                : phase === 'up-to-date' ? <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-rom-win" />
+                : <Download className="mt-0.5 h-5 w-5 shrink-0 text-blue-300" />}
+              <div>
+                <p className="text-sm font-semibold text-white">{title}</p>
+                <p className={`mt-1 text-xs leading-5 ${phase === 'error' ? 'text-rom-lossText' : 'text-rom-dim'}`}>{detail}</p>
+              </div>
+            </div>
+            {phase === 'ready' && <button className="rom-btn-primary" onClick={() => setConfirmInstall(true)}>{liveEngineCount > 0 ? 'Review update' : isMac ? 'Open installer' : 'Install and restart'}</button>}
+            {(phase === 'cancelled' || phase === 'available') && <button className="rom-btn-default" disabled={!!busy} onClick={() => void download()}>Download now</button>}
+            {phase === 'error' && <button className="rom-btn-default" disabled={!!busy} onClick={() => void check()}>Try again</button>}
+            {phase === 'downloading' && <button className="rom-btn-default" onClick={() => void cancelDownload()}>Stop download</button>}
+          </div>
+          {phase === 'downloading' && (
+            <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-white/10" role="progressbar" aria-label="Update download" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent ?? undefined}>
+              <div className="h-full rounded-full bg-blue-400 transition-all duration-300" style={{ width: percent === null ? '15%' : `${percent}%` }} />
+            </div>
+          )}
+        </div>
+        {actionError && phase === 'ready' && <p role="alert" className="mt-3 rounded-lg border border-rom-loss/30 bg-rom-loss/5 px-3 py-2 text-xs leading-5 text-rom-lossText">Could not start installation: {actionError} The verified update is still ready; review it and try again.</p>}
+        <p className="mt-4 text-xs leading-5 text-rom-dim">This version is the executable currently running. Installing an update never happens automatically while PolyBot is trading.</p>
+      </Card>
+
+      {confirmInstall && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label="Confirm PolyBot update" onClick={() => setConfirmInstall(false)} onKeyDown={(event) => { if (event.key === 'Escape') setConfirmInstall(false); }}>
+          <div ref={installDialogRef} className="w-full max-w-md rounded-2xl border border-blue-300/30 bg-rom-panel p-6 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+            <h3 className="text-lg font-semibold text-white">{isMac ? 'Open the verified update?' : 'Install the verified update?'}</h3>
+            <p className="mt-3 text-sm leading-6 text-rom-muted">
+              {isMac
+                ? 'PolyBot will open the downloaded disk image. Quit this copy, drag the new app to Applications, then reopen it to finish updating.'
+                : 'PolyBot will close and start the installer. Running strategies will stop until you reopen the app.'}
+            </p>
+            {liveEngineCount > 0 && <p className="mt-3 rounded-lg border border-rom-warn/30 bg-rom-warn/10 p-3 text-xs leading-5 text-rom-warn">{liveEngineCount} live engine{liveEngineCount === 1 ? ' is' : 's are'} enabled. Turn off live trading in Strategy, Crypto, and Scripts before installing. Existing positions stay open, but PolyBot cannot manage them while it is closed.</p>}
+            <div className="mt-5 flex justify-end gap-2">
+              <button className="rom-btn-default" onClick={() => setConfirmInstall(false)}>Later</button>
+              <button className="rom-btn-primary" disabled={busy === 'installing' || liveEngineCount > 0} onClick={() => { setConfirmInstall(false); void install(); }}>{busy === 'installing' ? 'Opening…' : isMac ? 'Open disk image' : 'Close and install'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </Section>
   );
 }
 

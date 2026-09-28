@@ -1116,6 +1116,17 @@ export interface AccountInfo {
   isDefault: boolean;
 }
 
+export interface UpdateStatus {
+  phase: 'idle' | 'checking' | 'available' | 'up-to-date' | 'downloading' | 'verifying' | 'ready' | 'cancelled' | 'error';
+  currentVersion: string;
+  latestVersion?: string;
+  releaseUrl?: string;
+  publishedAt?: string | null;
+  receivedBytes?: number;
+  totalBytes?: number | null;
+  message?: string;
+}
+
 export interface ROMApi {
   app: {
     version: () => Promise<string>;
@@ -1126,6 +1137,11 @@ export interface ROMApi {
       releaseUrl: string;
       publishedAt: string | null;
     }>;
+    getUpdateStatus: () => Promise<UpdateStatus>;
+    downloadUpdate: () => Promise<{ version: string; ready: true }>;
+    cancelUpdateDownload: () => Promise<{ cancelled: boolean }>;
+    installUpdate: () => Promise<{ ok: boolean; message: string }>;
+    onUpdateStatus: (cb: (status: UpdateStatus) => void) => () => void;
     openExternal: (url: string) => Promise<void>;
     showItemInFolder: (filePath: string) => Promise<void>;
     getUserDataPath: () => Promise<string>;
