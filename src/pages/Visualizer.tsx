@@ -3,11 +3,12 @@ import {
   Activity, Pause, Play, RotateCcw, Sparkles, TrendingDown, TrendingUp,
   Wallet,
 } from 'lucide-react';
-import { Area, AreaChart, Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Area, AreaChart, Bar, BarChart, Cell, CartesianGrid, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import type { BotPosition, PnlPoint, SignalSource } from '@shared/types';
 import { useApp } from '../state/AppStateProvider';
 import { Card, Page, ShareButton } from '../components/common';
 import { cls, fmtUsd } from '../utils/format';
+import { drawRadar } from '../utils/radar';
 
 type OrbStage = 'scan' | 'orbit' | 'win-fly' | 'loss-fly' | 'eject';
 
@@ -230,7 +231,9 @@ export function VisualizerPage() {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     };
     resize();
-    window.addEventListener('resize', resize);
+    const observer = new ResizeObserver(resize);
+    observer.observe(wrapper);
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 
     let last = performance.now();
     let hiddenTimer = 0;
@@ -257,14 +260,17 @@ export function VisualizerPage() {
       bgGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
       ctx.fillStyle = bgGrad;
       ctx.fillRect(0, 0, w, h);
+      drawRadar(ctx, w, h);
 
-      drawSweep(ctx, cx, cy, ts, Math.max(w, h));
+      const animate = running && !reducedMotion.matches;
+      const drawTime = animate ? ts : 0;
+      drawSweep(ctx, cx, cy, drawTime, Math.max(w, h));
 
-      drawSun(ctx, cx, cy, ts);
+      drawSun(ctx, cx, cy, drawTime);
 
       const live: Orb[] = [];
       for (const orb of orbsRef.current) {
-        if (running) {
+        if (animate) {
           stepOrb(orb, ts, dt, cx, cy, w, h, winBucketX, lossBucketX, bucketY);
         }
 
@@ -286,11 +292,12 @@ export function VisualizerPage() {
       }
       orbsRef.current = live;
 
-      rafRef.current = requestAnimationFrame(tick);
+      if (!animate) hiddenTimer = window.setTimeout(() => { rafRef.current = requestAnimationFrame(tick); }, 500);
+      else rafRef.current = requestAnimationFrame(tick);
     };
     rafRef.current = requestAnimationFrame(tick);
     return () => {
-      window.removeEventListener('resize', resize);
+      observer.disconnect();
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       clearTimeout(hiddenTimer);
     };
@@ -317,7 +324,7 @@ export function VisualizerPage() {
   return (
     <Page
       title="Trade Visualizer"
-      subtitle="Live orbital map of every signal the bot sees and every trade it takes. Buckets at the bottom catch resolved positions."
+      subtitle="Follow recorded signals, open positions, and settled outcomes in one orbital workspace. Animation is a visual aid, not an execution indicator."
       actions={
         <>
           <button onClick={() => setRunning((v) => !v)} className="rom-btn-default">
@@ -330,10 +337,10 @@ export function VisualizerPage() {
         </>
       }
     >
-      <div className="grid gap-4 lg:grid-cols-[320px,1fr]">
+      <div className="visualizer-workspace grid gap-5 xl:grid-cols-[280px,minmax(0,1fr)]">
         <div className="space-y-3">
           <Card header={<div className="text-xs uppercase tracking-wider text-rom-muted">Equity (session)</div>}>
-            <div className="text-lg font-mono text-white">{fmtUsd(account?.totalUsd)}</div>
+            <div className="text-3xl tracking-tight font-mono text-white">{fmtUsd(account?.totalUsd)}</div>
             <div className={cls(
               'text-xs',
               sessionPnl >= 0 ? 'text-rom-win' : 'text-rom-lossText',
@@ -341,7 +348,7 @@ export function VisualizerPage() {
               {fmtUsd(sessionPnl, { sign: true })} session &middot;{' '}
               <span className="text-rom-dim">{sessionRoi >= 0 ? '+' : ''}{sessionRoi.toFixed(2)}%</span>
             </div>
-            <div className="mt-2 h-20">
+            <div className="mt-4 h-28">
               {sessionSeries.length < 3 ? (
                 <div className="grid h-full place-items-center text-[11px] text-rom-dim">collecting data…</div>
               ) : (
@@ -354,11 +361,11 @@ export function VisualizerPage() {
                       </linearGradient>
                     </defs>
                     <Tooltip
-                      contentStyle={{ background: '#171722', border: '1px solid #ffffff14', borderRadius: 6, fontSize: 11 }} labelStyle={{ color: '#FFFFFF' }} itemStyle={{ color: '#FFFFFF' }}
+                      contentStyle={{ background: '#101e30', border: '1px solid #365576', borderRadius: 8, fontSize: 12 }} labelStyle={{ color: '#FFFFFF' }} itemStyle={{ color: '#FFFFFF' }}
                       formatter={(v: number) => [`$${v.toFixed(2)}`, 'Equity']}
                       labelFormatter={() => ''}
                     />
-                    <Area type="monotone" dataKey="totalUsd" stroke="#3B82F6" strokeWidth={1.5} fill="url(#sparkGrad)" />
+                    <Area type="monotone" dataKey="totalUsd" stroke="#88c6ff" strokeWidth={2} fill="url(#sparkGrad)" isAnimationActive={false} />
                   </AreaChart>
                 </ResponsiveContainer>
               )}
@@ -366,9 +373,11 @@ export function VisualizerPage() {
           </Card>
 
           <Card header={<div className="text-xs uppercase tracking-wider text-rom-muted">P&amp;L per hour (12h)</div>}>
-            <div className="h-24">
+            <div className="h-32">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={hourlyBars}>
+                  <CartesianGrid vertical={false} stroke="#253b54" strokeDasharray="3 6" />
+                  <ReferenceLine y={0} stroke="#66809c" />
                   <Tooltip
                     contentStyle={{ background: '#171722', border: '1px solid #ffffff14', borderRadius: 6, fontSize: 11 }} labelStyle={{ color: '#FFFFFF' }} itemStyle={{ color: '#FFFFFF' }}
                     formatter={(v: number, n: string) => {
@@ -376,9 +385,11 @@ export function VisualizerPage() {
                       return [v, n];
                     }}
                   />
-                  <XAxis dataKey="hour" hide />
+                  <XAxis dataKey="hour" tick={{ fill: '#a4b8cf', fontSize: 11 }} tickLine={false} axisLine={false} interval={3} />
                   <YAxis hide />
-                  <Bar dataKey="pnl" fill="#3B82F6" radius={[2, 2, 0, 0]} />
+                  <Bar dataKey="pnl" fill="#88c6ff" radius={[3, 3, 0, 0]} isAnimationActive={false}>
+                    {hourlyBars.map((bar) => <Cell key={bar.hour} fill={bar.pnl < 0 ? '#fb7185' : '#88c6ff'} />)}
+                  </Bar>
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -427,8 +438,10 @@ export function VisualizerPage() {
         </div>
 
         <div className="flex flex-col gap-2">
-          <div ref={wrapperRef} className="relative h-[calc(100vh-280px)] min-h-[440px] overflow-hidden rounded-2xl border border-rom-border bg-rom-void">
-            <canvas ref={canvasRef} className="absolute inset-0" />
+          <div ref={wrapperRef} className="orbital-stage relative h-[calc(100vh-280px)] min-h-[520px] overflow-hidden rounded-2xl border border-rom-border bg-rom-void">
+            <canvas ref={canvasRef} className="absolute inset-0" role="img" aria-label="Orbital view of recorded signals and positions; account totals and outcomes are listed alongside it" />
+            {signals.length === 0 && positions.length === 0 && <div className="absolute bottom-20 left-5 right-5 text-center text-xs text-rom-muted">Waiting for recorded signals · the map fills as market activity arrives</div>}
+            <div className="orbital-caption"><span>ROM / ORBITAL VIEW</span><small>{running ? 'Animation running' : 'Animation paused'} · {signals.length} recorded signals</small></div>
 
             <div className="pointer-events-none absolute right-3 top-3 flex flex-col gap-1 rounded-lg border border-rom-border bg-rom-void/80 px-3 py-2 text-[11px] text-rom-muted backdrop-blur">
               <LegendDot color="#3B82F6" label="Large Trade signal" />
@@ -688,14 +701,12 @@ function drawSun(ctx: CanvasRenderingContext2D, cx: number, cy: number, t: numbe
   ctx.beginPath();
   ctx.arc(cx, cy, 140, 0, TAU);
   ctx.fill();
-  const core = ctx.createRadialGradient(cx, cy, 0, cx, cy, 22 * pulse);
-  core.addColorStop(0, '#FFFFFF');
-  core.addColorStop(0.4, '#3B82F6');
-  core.addColorStop(1, 'rgba(59, 130, 246, 0)');
-  ctx.fillStyle = core;
+  ctx.fillStyle = '#0c1d32';
+  ctx.strokeStyle = '#9bd0ff';
+  ctx.lineWidth = 1.5;
   ctx.beginPath();
-  ctx.arc(cx, cy, 28 * pulse, 0, TAU);
-  ctx.fill();
+  ctx.arc(cx, cy, 28, 0, TAU);
+  ctx.fill(); ctx.stroke();
   ctx.fillStyle = 'rgba(255,255,255,0.85)';
   ctx.font = "600 11px ui-monospace, monospace";
   ctx.textAlign = 'center';

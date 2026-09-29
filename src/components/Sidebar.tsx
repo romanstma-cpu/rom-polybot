@@ -61,8 +61,8 @@ export function Sidebar({ page, setPage }: SidebarProps) {
     ...(advanced ? [{ label: 'Advanced tools', ids: ['evidence', 'analytics', 'signals', 'crypto15m', 'scripts', 'backtest', 'terminal', 'profiles', 'accounts', 'settings', 'logs', 'guide', 'about'] }] : []),
   ];
   return rail ? (
-    <aside aria-label="Main navigation" className="flex h-full w-14 shrink-0 flex-col items-center gap-1 border-r border-rom-border bg-rom-sidebar py-4">
-      {NAV.slice(0, 9).map(({ id, label, icon: Icon }) => {
+    <nav aria-label="Main navigation" className="flex h-full w-14 shrink-0 flex-col items-center gap-1 overflow-y-auto border-r border-rom-border bg-rom-sidebar py-4">
+      {NAV.map(({ id, label, icon: Icon }) => {
         const active = page === id;
         return (
           <button
@@ -72,7 +72,7 @@ export function Sidebar({ page, setPage }: SidebarProps) {
             aria-current={active ? 'page' : undefined}
             onClick={() => setPage(id)}
             className={cls(
-              'grid h-10 w-10 place-items-center rounded-lg transition-colors',
+              'grid h-10 w-10 shrink-0 place-items-center rounded-lg transition-colors',
               active ? 'bg-blue-500/15 text-blue-300' : 'text-rom-muted hover:bg-white/[0.06] hover:text-white',
             )}
           >
@@ -80,7 +80,11 @@ export function Sidebar({ page, setPage }: SidebarProps) {
           </button>
         );
       })}
-    </aside>
+      <button aria-label="Live Visualizer" title="Live Visualizer" aria-current={page === 'visualizer' ? 'page' : undefined}
+        onClick={() => setPage('visualizer')} className={cls('grid h-10 w-10 shrink-0 place-items-center rounded-lg transition-colors', page === 'visualizer' ? 'bg-blue-500/15 text-blue-300' : 'text-rom-muted hover:bg-white/[0.06] hover:text-white')}>
+        <Orbit className="h-5 w-5" />
+      </button>
+    </nav>
   ) : (
     <aside className="sidebar-shell flex h-full w-56 shrink-0 flex-col border-r border-rom-border bg-rom-sidebar">
     <div className="flex items-center gap-3 border-b border-rom-border/70 px-5 py-5"><div className="rounded-xl border border-rom-purple/20 bg-rom-purple/[0.06] p-1"><ROMSprite size={38} /></div><div><div className="text-lg font-semibold tracking-[0.14em]">ROM</div><div className="font-mono text-[11px] uppercase tracking-[0.12em] text-rom-muted">Polybot / US</div></div></div>

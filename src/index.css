@@ -13,6 +13,12 @@
 .rom-page-header{position:relative}
 .rom-page-header::after{content:"";position:absolute;left:2rem;right:2rem;bottom:0;height:1px;background:linear-gradient(90deg,rgba(110,168,254,.32),rgba(255,255,255,.06) 40%,transparent)}
 .rom-page-scroll{scrollbar-gutter:stable}
+.orbital-stage{background:radial-gradient(ellipse at center,#122c49 0%,#0a1728 45%,#070e19 85%);box-shadow:inset 0 1px 0 #c2e0ff12,0 20px 60px #0004}
+.orbital-caption{position:absolute;bottom:18px;left:20px;right:20px;display:flex;align-items:center;justify-content:space-between;gap:12px;pointer-events:none;border-top:1px solid #90caff22;padding-top:12px;font:11px 'Cascadia Code',Consolas,monospace;letter-spacing:.12em;color:#bad6f2}
+.orbital-caption small{font-size:11px;letter-spacing:0;color:#99b5d1}
+.visualizer-workspace{align-items:start}.visualizer-workspace>div:first-child{display:grid;gap:12px}.visualizer-workspace>div:first-child>div{margin-top:0!important;background:linear-gradient(135deg,#142337,#101a29);border-color:#2c435e}
+@media(max-width:1279px){.visualizer-workspace>div:first-child{grid-template-columns:repeat(2,minmax(0,1fr))}.orbital-stage{height:560px}}
+@media(max-width:639px){.visualizer-workspace>div:first-child{grid-template-columns:1fr}.orbital-caption{align-items:flex-start;flex-direction:column}.orbital-stage{min-height:520px}}
 @media(max-width:1023px){.rom-page-header::after{left:1.5rem;right:1.5rem}}
 @media(max-width:639px){.rom-page-header::after{left:1rem;right:1rem}.app-shell::before{background-size:24px 24px}}
 
