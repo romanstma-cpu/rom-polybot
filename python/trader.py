@@ -248,19 +248,30 @@ def _enrich_close_time(conn, sig: dict) -> None:
         sig["close_time"] = m.get("close_time") or ""
 
 
-def should_trade(signal: dict, source: str, cfg: dict, *, now: float | None = None) -> tuple[bool, str]:
+def should_trade(signal: dict, source: str, cfg: dict, *, now: float | None = None,
+                 calibration: dict | None = None) -> tuple[bool, str]:
     problem = signal_problem(signal, source)
     if problem:
         return False, problem
     conf = float(signal.get("confidence") or 0.0)
     edge = _compute_edge(signal, source)
+    calibrated = calibration is not None and source in ('whale', 'momentum')
+    if calibrated:
+        try:
+            _, cost_cents = _signal_cost_cents(signal, source)
+            edge = signal_calibration.calibrated_edge(
+                signal, source, cost_cents, time.time() if now is None else now,
+                calibration,
+            )
+        except (ValueError, KeyError, TypeError) as exc:
+            return False, f'Qualified edge unavailable: {exc}'
     use_rules = bool(cfg.get("use_rules"))
 
     if source == "whale":
         if not cfg.get("trade_whales", False):
             return False, "whales disabled"
         if not use_rules:
-            if conf < cfg["min_confidence_whale"]:
+            if not calibrated and conf < cfg["min_confidence_whale"]:
                 return False, f"conf {conf:.1f} < {cfg['min_confidence_whale']}"
             if edge < cfg["min_edge_pts_whale"]:
                 return False, f"edge {edge:.1f} < {cfg['min_edge_pts_whale']}"
@@ -268,7 +279,7 @@ def should_trade(signal: dict, source: str, cfg: dict, *, now: float | None = No
         if not cfg.get("trade_momentum", False):
             return False, "momentum disabled"
         if not use_rules:
-            if conf < cfg["min_confidence_momentum"]:
+            if not calibrated and conf < cfg["min_confidence_momentum"]:
                 return False, f"conf {conf:.1f} < {cfg['min_confidence_momentum']}"
             if edge < cfg["min_edge_pts_momentum"]:
                 return False, f"edge {edge:.1f} < {cfg['min_edge_pts_momentum']}"
@@ -1097,6 +1108,8 @@ async def _scan_for_trades_traced(cfg: dict, trace_id: str) -> list[dict]:
         return []
 
     candidates: list[tuple[dict, str]] = []
+    calibrated_selection = live and (bool(cfg.get('require_qualified_edge', True))
+                                    or cfg.get('sizing_mode') == 'kelly')
     fetched_w = fetched_m = 0
     gate_resolution = int(cfg.get("max_resolution_days", 0) or 0) > 0
     with db.get_db() as conn:
@@ -1108,7 +1121,7 @@ async def _scan_for_trades_traced(cfg: dict, trace_id: str) -> list[dict]:
             )
             for sig in db.fetch_tradeable_whale_signals(
                 conn,
-                min_confidence=0.0 if use_rules else float(cfg["min_confidence_whale"]),
+                min_confidence=0.0 if use_rules or calibrated_selection else float(cfg["min_confidence_whale"]),
                 max_age_sec=int(cfg["max_signal_age_sec"]),
                 seen_ids=seen,
             ):
@@ -1123,7 +1136,7 @@ async def _scan_for_trades_traced(cfg: dict, trace_id: str) -> list[dict]:
             )
             for sig in db.fetch_tradeable_momentum_signals(
                 conn,
-                min_confidence=0.0 if use_rules else float(cfg["min_confidence_momentum"]),
+                min_confidence=0.0 if use_rules or calibrated_selection else float(cfg["min_confidence_momentum"]),
                 max_age_sec=int(cfg["max_signal_age_sec"]),
                 allowed_types=list(cfg.get("allowed_momentum_signal_types", [])),
                 seen_ids=seen,
@@ -1149,14 +1162,6 @@ async def _scan_for_trades_traced(cfg: dict, trace_id: str) -> list[dict]:
         _skip_log("no candidates: " + ", ".join(bits))
         return []
 
-    # If otherwise eligible signals disagree, wait rather than let sort order
-    # choose a side or allow both sides to consume the risk budget.
-    eligible_sides: dict[str, set[str]] = {}
-    for signal, source in candidates:
-        if should_trade(signal, source, cfg)[0]:
-            direction, _ = _signal_cost_cents(signal, source)
-            eligible_sides.setdefault(signal["ticker"], set()).add(direction)
-    conflicts = {ticker for ticker, sides in eligible_sides.items() if len(sides) > 1}
     ranking_at = time.time()
     ranking_model = None
     requires_qualified_edge = live and bool(cfg.get('require_qualified_edge', True))
@@ -1169,6 +1174,14 @@ async def _scan_for_trades_traced(cfg: dict, trace_id: str) -> list[dict]:
         if requires_qualified_edge and not ranking_model.get('bins'):
             _skip_log('No qualified signal group yet; keep Practice running to collect settled evidence')
             return []
+    # Use the same qualified gate for selection, conflict detection and entry.
+    # The historical flow score is a feature, not another win-probability gate.
+    eligible_sides: dict[str, set[str]] = {}
+    for signal, source in candidates:
+        if should_trade(signal, source, cfg, now=ranking_at, calibration=ranking_model)[0]:
+            direction, _ = _signal_cost_cents(signal, source)
+            eligible_sides.setdefault(signal["ticker"], set()).add(direction)
+    conflicts = {ticker for ticker, sides in eligible_sides.items() if len(sides) > 1}
     evidence_weights: dict[str, float] = {}
     if live and (cfg.get("evidence_gated_sizing_enabled", True)
                  or cfg.get("evidence_allocation_enabled")):
@@ -1194,7 +1207,7 @@ async def _scan_for_trades_traced(cfg: dict, trace_id: str) -> list[dict]:
     for sig, src in candidates:
         signal_id = int(sig.get('id') or 0)
         ticker = str(sig.get('ticker') or '')
-        ok, why = should_trade(sig, src, cfg)
+        ok, why = should_trade(sig, src, cfg, calibration=ranking_model)
         if ok and sig["ticker"] in conflicts:
             ok, why = False, "eligible signals disagree on direction; waiting for alignment"
         if not ok:

@@ -16,7 +16,7 @@ def test_practice_cycle_records_later_stage_rejection_without_live_balance(tmp_p
     })
     monkeypatch.setattr(trader, 'get_env', lambda: 'mainnet')
     monkeypatch.setattr(trader, '_is_blocked_by_trading_hours', lambda *_: (False, ''))
-    monkeypatch.setattr(trader, 'should_trade', lambda *_: (True, 'ok'))
+    monkeypatch.setattr(trader, 'should_trade', lambda *_a, **_kw: (True, 'ok'))
     monkeypatch.setattr(trader, '_rank_candidates', lambda *_a, **_kw: None)
     monkeypatch.setattr(db, 'fetch_tradeable_whale_signals', lambda *_a, **_kw: [
         {'id': 17, 'ticker': 'US-MARKET', 'price': 0.5, 'taker_side': 'yes'},

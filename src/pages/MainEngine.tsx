@@ -460,7 +460,7 @@ export function MainEnginePage({ onNav }: { onNav: (page: PageId) => void }) {
 
       <Section
         title="Signal gates"
-        description="Higher thresholds = fewer, higher-quality trades. Edge is confidence minus market-implied probability."
+        description="Live entries use conservative calibrated edge after fees. The minimum flow scores below apply to Practice and legacy selection; they are heuristic scores, not win probabilities. Raising thresholds reduces entries without guaranteeing better returns."
       >
         <Card>
           <div className="grid gap-4 md:grid-cols-2">
@@ -472,11 +472,11 @@ export function MainEnginePage({ onNav }: { onNav: (page: PageId) => void }) {
               <NumberInput value={config.minEdgePtsMomentum} step={0.5} suffix="pts"
                 onChange={(v) => void update('minEdgePtsMomentum', v)} />
             </Field>
-            <Field label="Min confidence (large trades)">
+            <Field label="Min flow score (large trades · Practice)">
               <NumberInput value={config.minConfidenceWhale} step={1} suffix="%"
                 onChange={(v) => void update('minConfidenceWhale', v)} />
             </Field>
-            <Field label="Min confidence (momentum)">
+            <Field label="Min flow score (momentum · Practice)">
               <NumberInput value={config.minConfidenceMomentum} step={1} suffix="%"
                 onChange={(v) => void update('minConfidenceMomentum', v)} />
             </Field>
@@ -851,7 +851,7 @@ export function MainEnginePage({ onNav }: { onNav: (page: PageId) => void }) {
 
       <Section
         title="Loop cadence"
-        description="How often each subsystem runs. Lower = more API calls; higher = laggier."
+        description="Signal intervals are periodic fallbacks. New validated exchange trades can trigger earlier scans, debounced to once every 10 seconds. Execution, balance and position checks keep their own intervals."
       >
         <Card>
           <div className="grid gap-4 md:grid-cols-3">

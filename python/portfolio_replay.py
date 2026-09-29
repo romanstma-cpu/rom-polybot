@@ -203,13 +203,27 @@ class Portfolio:
         if blocked or trader._is_blocked_by_trading_hours(self.cfg,now=self.now)[0]:
             self.rejected['risk or trading hours']+=1
             return
+        requires_qualified=bool(self.cfg.get('require_qualified_edge',True))
+        use_calibration=requires_qualified or self.cfg.get('sizing_mode') == 'kelly'
+        if use_calibration:
+            if self.calibration is None or self.now-self.calibration['asof'] >= 300:
+                self.calibration=signal_calibration.fit(self.events,self.now)
         candidates=[]
         for key,(sig,source) in list(self.candidates.items()):
             if key in self.seen:continue
             if signal_freshness_problem(sig,float(self.cfg['max_signal_age_sec']),self.now):
                 self.candidates.pop(key); self.rejected['expired signal']+=1; continue
-            ok,why=trader.should_trade(sig,source,self.cfg,now=self.now)
+            if requires_qualified and not self.calibration.get('bins'):
+                self.rejected['no qualified signal group yet']+=1;continue
+            ok,why=trader.should_trade(sig,source,self.cfg,now=self.now,
+                                     calibration=self.calibration if use_calibration else None)
             if not ok:
+                # Keep the replay's public rejection categories stable even
+                # when a calibrated failure is caught before quote selection.
+                if use_calibration and why.startswith('Qualified edge unavailable:'):
+                    why='no qualified edge for this signal group'
+                elif use_calibration and why.startswith('edge '):
+                    why='execution margin or price cap'
                 self.rejected[why]+=1;continue
             candidates.append((key,sig,source))
         sides={}
@@ -220,15 +234,7 @@ class Portfolio:
         # calibrated return, and large-trade and momentum entries are priced
         # from the calibrated edge. Replaying the heuristic score instead
         # would trade signals live trading refuses.
-        requires_qualified=bool(self.cfg.get('require_qualified_edge',True))
-        use_calibration=requires_qualified or self.cfg.get('sizing_mode') == 'kelly'
         if use_calibration:
-            if self.calibration is None or self.now-self.calibration['asof'] >= 300:
-                self.calibration=signal_calibration.fit(self.events,self.now)
-            if requires_qualified and not self.calibration.get('bins'):
-                if candidates:
-                    self.rejected['no qualified signal group yet']+=len(candidates)
-                return
             candidates.sort(key=lambda c:signal_calibration.capital_priority(c[1],c[2],self.now,self.calibration),reverse=True)
         else:
             candidates.sort(key=lambda c:trader._compute_edge(c[1],c[2]),reverse=True)

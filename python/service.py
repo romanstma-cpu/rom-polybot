@@ -15,6 +15,7 @@ import us_account_stream
 import us_market_stream
 import main_recorder
 import decision_journal
+import signal_schedule
 import order_journal
 import account_risk
 import fill_markouts
@@ -624,6 +625,8 @@ async def _scanner_and_trader_loop() -> None:
     _loop_heartbeat = asyncio.get_event_loop().time()
     last_whale = 0.0
     last_momentum = 0.0
+    last_whale_revision = 0
+    last_momentum_revision = 0
     last_trade = 0.0
     last_poll = 0.0
     last_resolve = 0.0
@@ -723,9 +726,15 @@ async def _scanner_and_trader_loop() -> None:
             logger.warning('Main replay recording gap: %s',type(exc).__name__)
 
         try:
-            if STATE.auth_ok and collect_main and now - last_whale >= float(cfg.get("whale_scan_interval", 120)):
+            scan_now = asyncio.get_running_loop().time()
+            flow_revision = momentum_window.tape.accepted
+            if STATE.auth_ok and collect_main and signal_schedule.scan_due(
+                scan_now, last_whale, float(cfg.get("whale_scan_interval", 120)),
+                flow_revision, last_whale_revision,
+            ):
                 cnt, rows = await scanner.scan_whales(cfg)
-                last_whale = now
+                last_whale = scan_now
+                last_whale_revision = flow_revision
                 STATE.last_whale_scan_at = datetime.now(timezone.utc).isoformat()
                 if cnt:
                     logger.info(f"whale scan: {cnt} new")
@@ -761,9 +770,15 @@ async def _scanner_and_trader_loop() -> None:
             logger.warning(f"whale scan error: {e}")
 
         try:
-            if STATE.auth_ok and collect_main and now - last_momentum >= float(cfg.get("momentum_scan_interval", 90)):
+            scan_now = asyncio.get_running_loop().time()
+            flow_revision = momentum_window.tape.accepted
+            if STATE.auth_ok and collect_main and signal_schedule.scan_due(
+                scan_now, last_momentum, float(cfg.get("momentum_scan_interval", 90)),
+                flow_revision, last_momentum_revision,
+            ):
                 cnt, rows = await scanner.scan_momentum(cfg)
-                last_momentum = now
+                last_momentum = scan_now
+                last_momentum_revision = flow_revision
                 STATE.last_momentum_scan_at = datetime.now(timezone.utc).isoformat()
                 if cnt:
                     logger.info(f"momentum scan: {cnt} new")

@@ -19,6 +19,8 @@ try {
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.getByRole('button', {name: 'Continue to API setup'}).click();
+  await page.waitForFunction(async () => (await window.rom.backend.info()).status === 'running',
+                            null, {timeout: 30000});
   const [backend, account, status] = await page.evaluate(async () => Promise.all([
     window.rom.backend.info(), window.rom.data.account(), window.rom.trading.status(),
   ]));
