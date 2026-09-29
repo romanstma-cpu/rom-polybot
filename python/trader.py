@@ -6,7 +6,7 @@ import math
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Callable, Optional
 
 import db
 import instance_lock
@@ -19,6 +19,7 @@ import execution_learning
 import execution_health
 import runtime_resilience
 import main_recorder
+import decision_journal
 import rules as rules_engine
 from execution_quality import (
     affordable_at_depth, entry_price, entry_vwap_cents, remaining_signal_margin,
@@ -517,17 +518,23 @@ def entry_budget(balance_usd, filled_exposure, exposure, edge_pts, limit_cents, 
 
 async def execute_signal(
     signal: dict, source: str, cfg: dict, balance_usd: float, *, paper: bool = False,
+    on_skip: Callable[[str, str], None] | None = None,
 ) -> dict | None:
+    def reject(stage: str, reason: str) -> None:
+        if on_skip is not None:
+            on_skip(stage, reason)
+        return None
+
     problem = signal_problem(signal, source)
     if problem:
         logger.info("[skip] %s: %s", signal.get("ticker", "unknown"), problem)
-        return None
+        return reject('signal', problem)
     direction, signal_cost_cents = _signal_cost_cents(signal, source)
     age_limit = float(cfg.get('max_signal_age_sec', 120))
     freshness = signal_freshness_problem(signal, age_limit, time.time())
     if freshness:
         logger.info('[skip] %s: %s', signal.get('ticker'), freshness)
-        return None
+        return reject('signal', freshness)
     edge_pts = _compute_edge(signal, source)
     calibration = None
     requires_qualified_edge = (
@@ -541,7 +548,7 @@ async def execute_signal(
             signal_calibration.calibrated_edge(signal,source,signal_cost_cents,time.time(),calibration)
         except Exception as exc:
             logger.info('[skip] %s: qualified edge unavailable: %s',signal.get('ticker'),exc)
-            return None
+            return reject('evidence', f'Qualified edge unavailable ({type(exc).__name__})')
     env = get_env()
 
     allocation_multiplier = 1.0
@@ -556,7 +563,7 @@ async def execute_signal(
                 f"[skip] {signal['ticker']}: MAX_OPEN_POSITIONS "
                 f"({open_count}/{cfg['max_open_positions']} open)"
             )
-            return None
+            return reject('risk', 'Open position cap reached')
         if not cfg.get("unlimited_daily_new_positions"):
             day_off = trading_day_offset_min(cfg)
             today_count = (
@@ -571,7 +578,7 @@ async def execute_signal(
                     f"Toggle 'Unlimited daily new positions' in Settings → "
                     f"Concurrency to disable this cap."
                 )
-                return None
+                return reject('risk', 'Daily new-position cap reached')
         per_event_cap = int(cfg.get("max_positions_per_event", 1) or 1)
         event_count = (
             db.count_paper_positions_in_event(
@@ -585,14 +592,14 @@ async def execute_signal(
                 f"[skip] {signal['ticker']}: event already at its "
                 f"max ({per_event_cap}) position(s)"
             )
-            return None
+            return reject('risk', 'Event position cap reached')
         market_exists = (
             db.exists_paper_position_in_market(conn, signal["ticker"], direction, env)
             if paper else db.exists_position_in_market(conn, signal["ticker"], direction, env)
         )
         if market_exists:
             logger.info(f"[skip] {signal['ticker']}: market/side already open")
-            return None
+            return reject('risk', 'Market and side already open')
         exposure = (
             db.current_paper_exposure_usd(conn, env)
             if paper else db.current_total_exposure_usd(conn, env)
@@ -613,7 +620,7 @@ async def execute_signal(
                 f"for group "
                 f"{account_risk.group_key(conn, signal['ticker'], signal.get('event_ticker') or '')}"
             )
-            return None
+            return reject('risk', 'Related-outcome exposure cap reached')
         enabled_sources = [
             item for item, enabled in (
                 ("whale", cfg.get("trade_whales")),
@@ -644,7 +651,7 @@ async def execute_signal(
         if not paper:
             execution_health.circuit.record_failure("quote", exc)
         logger.info("[skip] %s: live price unavailable or unsuitable: %s", signal["ticker"], exc)
-        return None
+        return reject('quote', f'Live price unavailable or unsuitable ({type(exc).__name__})')
     if not paper:
         execution_health.circuit.record_quote_success()
     edge_pts = remaining_signal_margin(edge_pts, signal_cost_cents, limit_cents)
@@ -653,7 +660,7 @@ async def execute_signal(
             edge_pts = signal_calibration.calibrated_edge(signal,source,limit_cents,time.time(),calibration)
         except ValueError as exc:
             logger.info('[skip] %s: %s',signal.get('ticker'),exc)
-            return None
+            return reject('evidence', str(exc))
     threshold = float(cfg.get("min_edge_pts_momentum" if source == "momentum" else "min_edge_pts_whale", 0))
     execution_style = ('maker' if maker_only else
                        ('crossing' if limit_cents >= entry_quote['ask_cents'] else 'resting'))
@@ -666,7 +673,7 @@ async def execute_signal(
         )
         if feedback['blocked']:
             logger.info('[skip] %s: confirmed execution evidence shows persistently poor fills or adverse post-fill movement; waiting for evidence to expire', signal['ticker'])
-            return None
+            return reject('execution', 'Poor fills or adverse post-fill movement')
         # Calibrated edge already includes the fee reserve. Heuristic margin
         # does not: subtract fees without mislabeling it as expected profit.
         execution_fee_cents = feedback['feeCents']
@@ -675,7 +682,7 @@ async def execute_signal(
         edge_pts -= execution_fee_cents
     if not math.isfinite(edge_pts) or edge_pts < max(0.0, threshold):
         logger.info("[skip] %s: remaining signal margin %.1f below execution threshold", signal["ticker"], edge_pts)
-        return None
+        return reject('edge', f'Remaining signal margin {edge_pts:.1f} below {threshold:.1f} threshold')
     hi = int(cfg["max_entry_price_cents"])
     lo = int(cfg["min_entry_price_cents"])
     if bool(cfg.get("use_rules")):
@@ -692,19 +699,19 @@ async def execute_signal(
                     f"[skip] {signal['ticker']}: order price {limit_cents}c fails "
                     f"your entry-cost rule ({why}; book moved since signal)"
                 )
-                return None
+                return reject('price', f'Order price fails entry-cost rule: {why}')
     if limit_cents > hi:
         logger.info(
             f"[skip] {signal['ticker']}: order price {limit_cents}c above your "
             f"max-entry cap {hi}c (favorite ran past the cap since the signal)"
         )
-        return None
+        return reject('price', f'Order price {limit_cents}c above {hi}c cap')
     if limit_cents < lo:
         logger.info(
             f"[skip] {signal['ticker']}: order price {limit_cents}c below your "
             f"min-entry {lo}c (book moved since signal)"
         )
-        return None
+        return reject('price', f'Order price {limit_cents}c below {lo}c floor')
 
     fee_time = time.time()
     target_usd = entry_budget(
@@ -724,12 +731,12 @@ async def execute_signal(
 
     if target_usd <= 0:
         logger.info(f"[skip] {signal['ticker']}: no available risk budget")
-        return None
+        return reject('risk', 'No available risk budget')
 
     contracts = fees_us.affordable_contracts(target_usd,limit_cents/100,fee_time)
     contracts = min(contracts, int((target_usd+1e-9)/((limit_cents+execution_fee_cents)/100)))
     if contracts < 1:
-        return None
+        return reject('size', 'Available budget cannot buy one contract after fees')
 
     if not paper and cfg.get("market_quality_sizing_enabled", True):
         quality_multiplier, quality_reason = market_quality_multiplier(
@@ -756,7 +763,7 @@ async def execute_signal(
                 source, signal["ticker"], quality_multiplier, quality_reason,
             )
             if contracts < 1:
-                return None
+                return reject('size', 'Market-quality sizing leaves less than one contract')
 
     min_size = 0
     try:
@@ -780,7 +787,7 @@ async def execute_signal(
                 f"{limit_cents}c = ${bumped_cost:.2f} exceeds risk budget "
                 f"${risk_ceiling_usd:.2f}"
             )
-            return None
+            return reject('size', f'Market minimum costs ${bumped_cost:.2f}, above ${risk_ceiling_usd:.2f} risk budget')
 
     # Displayed depth must support the final size at an acceptable price.
     # Without this the touch price is assumed to absorb the whole order, which
@@ -793,7 +800,7 @@ async def execute_signal(
                 f"[skip] {signal['ticker']}: displayed depth {available} below "
                 f"the minimum tradable size at {limit_cents}c"
             )
-            return None
+            return reject('depth', f'Displayed depth {available} below minimum {max(1, min_size)}')
         if available < contracts:
             logger.info(
                 f"[{source}] {signal['ticker']}: sizing {contracts}->{available} "
@@ -804,7 +811,7 @@ async def execute_signal(
             vwap = entry_vwap_cents(levels, contracts, limit_cents)
         except ValueError as exc:
             logger.info(f"[skip] {signal['ticker']}: {exc}")
-            return None
+            return reject('depth', str(exc))
         # Charge the depth-weighted cost, not the touch, before re-testing edge.
         depth_edge = edge_pts - max(0.0, vwap - limit_cents)
         if depth_edge < max(0.0, threshold):
@@ -812,12 +819,12 @@ async def execute_signal(
                 f"[skip] {signal['ticker']}: margin {depth_edge:.1f} after "
                 f"{vwap:.2f}c depth-weighted entry is below threshold"
             )
-            return None
+            return reject('depth', f'Depth-weighted margin {depth_edge:.1f} below threshold')
 
     freshness = signal_freshness_problem(signal, age_limit, time.time())
     if freshness or time.monotonic() - quote_started > 5.0:
         logger.info('[skip] %s: %s', signal['ticker'], freshness or 'quote decision window expired')
-        return None
+        return reject('quote', freshness or 'Quote decision window expired')
     expected_cost_usd = contracts * limit_cents / 100.0
     client_order_id = f"rom-{'paper-' if paper else ''}{source}-{signal['id']}-{uuid.uuid4().hex[:8]}"
 
@@ -868,7 +875,7 @@ async def execute_signal(
         return saved
 
     if not cfg.get("enable_trading"):
-        return None
+        return reject('execution', 'Live trading disabled before submission')
 
     # A final routed quote closes the several-second gap between selection and
     # submission. Maker orders require the exact passive price. Crossing orders
@@ -882,20 +889,20 @@ async def execute_signal(
     except Exception as exc:
         execution_health.circuit.record_failure("quote", exc)
         logger.info('[skip] %s: final entry recheck failed: %s', signal['ticker'], exc)
-        return None
+        return reject('quote', f'Final entry recheck failed ({type(exc).__name__})')
     execution_health.circuit.record_quote_success()
     if maker_only and final_limit != limit_cents:
         logger.info(
             '[skip] %s: maker price changed %dc->%dc before submission',
             signal['ticker'], limit_cents, final_limit,
         )
-        return None
+        return reject('price', f'Maker price changed {limit_cents}c to {final_limit}c')
     if not maker_only and final_limit > limit_cents:
         logger.info(
             '[skip] %s: entry worsened %dc->%dc before submission',
             signal['ticker'], limit_cents, final_limit,
         )
-        return None
+        return reject('price', f'Entry worsened {limit_cents}c to {final_limit}c')
     if (not maker_only and execution_style == 'crossing'
             and cfg.get('require_entry_depth', True)):
         final_available = affordable_at_depth(
@@ -906,12 +913,12 @@ async def execute_signal(
                 '[skip] %s: displayed entry depth fell %d->%d contract(s) before submission',
                 signal['ticker'], contracts, final_available,
             )
-            return None
+            return reject('depth', f'Displayed depth fell to {final_available} before submission')
     entry_quote = final_quote
 
     if not execution_health.circuit.begin_attempt():
         logger.info("[skip] %s: %s", signal["ticker"], execution_health.circuit.blocked_reason() or "execution safety probe in progress")
-        return None
+        return reject('execution', execution_health.circuit.blocked_reason() or 'Execution safety probe in progress')
 
     # Persist before awaiting the exchange: a crash/timeout cannot erase intent.
     with db.get_db() as conn:
@@ -919,7 +926,7 @@ async def execute_signal(
         conn.execute('BEGIN IMMEDIATE')
         if conn.execute("SELECT 1 FROM bot_positions WHERE status='unknown' AND resolved=0 AND network=?", (env,)).fetchone():
             logger.warning('New entry blocked: an order requires reconciliation')
-            return None
+            return reject('execution', 'Order recovery required before new entry')
         row['status'] = 'unknown'
         pid = db.insert_bot_position(conn, row)
         db.log_event(conn, pid, 'intent', note='Reserved before exchange submission')
@@ -1000,6 +1007,20 @@ async def scan_for_trades(cfg: dict) -> list[dict]:
 async def _scan_for_trades_traced(cfg: dict, trace_id: str) -> list[dict]:
     global _last_scan_skip_log
     now_ts = time.time()
+    live = bool(cfg.get("enable_trading"))
+    paper = bool(cfg.get("main_paper_trading")) and not live
+    mode = 'live' if live else 'practice' if paper else 'paused'
+    decision_rows: list[dict] = []
+
+    def journal(source: str, ticker: str, signal_id: int | None,
+                stage: str, outcome: str, reason: str,
+                position_id: int | None = None) -> None:
+        decision_rows.append({
+            'at': time.time(), 'trace_id': trace_id, 'mode': mode,
+            'source': source[:24], 'ticker': ticker[:120], 'signal_id': signal_id,
+            'stage': stage[:32], 'outcome': outcome[:32], 'reason': str(reason)[:240],
+            'position_id': position_id,
+        })
 
     def _skip_log(reason: str) -> None:
         last_cycle["skipReason"] = reason
@@ -1016,10 +1037,11 @@ async def _scan_for_trades_traced(cfg: dict, trace_id: str) -> list[dict]:
         if now_ts - last < 60:
             return
         _last_scan_skip_log[key] = now_ts
+        journal('', '', None, 'cycle', 'skipped', reason)
+        decision_journal.write(decision_rows)
+        decision_rows.clear()
         logger.info(f"[skip-cycle] {reason}")
 
-    live = bool(cfg.get("enable_trading"))
-    paper = bool(cfg.get("main_paper_trading")) and not live
     if not live and not paper:
         _skip_log("Main strategy is paused")
         return []
@@ -1170,6 +1192,8 @@ async def _scan_for_trades_traced(cfg: dict, trace_id: str) -> list[dict]:
     filter_counts: dict[str, int] = {}
     cycle_stop_reason = None
     for sig, src in candidates:
+        signal_id = int(sig.get('id') or 0)
+        ticker = str(sig.get('ticker') or '')
         ok, why = should_trade(sig, src, cfg)
         if ok and sig["ticker"] in conflicts:
             ok, why = False, "eligible signals disagree on direction; waiting for alignment"
@@ -1181,13 +1205,34 @@ async def _scan_for_trades_traced(cfg: dict, trace_id: str) -> list[dict]:
                 _last_filter_log[key] = now_ts
                 cap_dict_size(_last_filter_log)
             filter_counts[why] = filter_counts.get(why, 0) + 1
+            journal(src, ticker, signal_id, 'signal', 'skipped', why)
             continue
+        skip_detail: list[tuple[str, str]] = []
         try:
-            row = await execute_signal(sig, src, cfg, balance_usd, paper=paper)
+            row = await execute_signal(
+                sig, src, cfg, balance_usd, paper=paper,
+                on_skip=lambda stage, reason: skip_detail.append((stage, reason)),
+            )
             if row:
                 inserted.append(row)
+                position_status = str(row.get('status') or 'unknown')
+                outcome = ('practice_fill' if paper else
+                           'submitted' if position_status == 'submitted' else
+                           ('rejected' if str(row.get('error') or '').startswith('HTTP ') else 'error')
+                           if position_status == 'error' else 'unknown')
+                journal(src, ticker, signal_id, 'submission', outcome,
+                        'Simulated fill; no exchange order' if paper else
+                        'Exchange order accepted' if outcome == 'submitted' else
+                        'Submission rejected; see History' if outcome == 'rejected' else
+                        'Submission outcome needs reconciliation; see History',
+                        row.get('id'))
+            else:
+                stage, reason = skip_detail[-1] if skip_detail else ('execution', 'Entry returned without a position')
+                filter_counts[reason] = filter_counts.get(reason, 0) + 1
+                journal(src, ticker, signal_id, stage, 'skipped', reason)
         except Exception as e:
             logger.error(f"[exec-fail] {sig['ticker']} {src}: {e}", exc_info=True)
+            journal(src, ticker, signal_id, 'execution', 'error', type(e).__name__)
         if paper:
             with db.get_db() as conn:
                 balance_usd = db.paper_account_stats(
@@ -1211,6 +1256,7 @@ async def _scan_for_trades_traced(cfg: dict, trace_id: str) -> list[dict]:
         "candidates": len(candidates), "placed": placed, "at": time.time(),
         "traceId": trace_id,
     })
+    decision_journal.write(decision_rows)
 
     if candidates:
         rejected = sum(filter_counts.values())

@@ -14,6 +14,7 @@ import shutil
 import us_account_stream
 import us_market_stream
 import main_recorder
+import decision_journal
 import order_journal
 import account_risk
 import fill_markouts
@@ -2323,6 +2324,12 @@ async def _h_trading_status(_p: dict) -> dict:
         categoryLimits=category_limits,
     )
 
+    try:
+        main_decisions = decision_journal.report()
+    except Exception:
+        logging.getLogger(__name__).exception('Main decision journal unavailable')
+        main_decisions = {'windowHours': 24, 'totals': {}, 'topSkipped': [], 'recent': []}
+
     c15 = await crypto15m_trader.status(cfg, authed=STATE.auth_ok)
     # Surfaced so the UI can offer recovery. A blocking intent halts EVERY
     # engine with no timeout and no automatic forget path, so leaving this
@@ -2370,6 +2377,7 @@ async def _h_trading_status(_p: dict) -> dict:
         },
         "practiceReadiness": practice_readiness,
         "opportunityFunnel": opportunity,
+        "mainDecisions": main_decisions,
         "c15": {
             "enabled": c15.get("enabled"),
             "live": c15.get("trading"),

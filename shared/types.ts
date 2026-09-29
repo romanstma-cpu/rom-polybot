@@ -712,6 +712,24 @@ export interface TradingStatus {
   mainFilterCounts: Record<string, number>;
   mainCandidates: number;
   mainPlaced: number;
+  mainDecisions?: {
+    windowHours: number;
+    totals: Record<string, number>;
+    topSkipped: { stage: string; reason: string; count: number }[];
+    recent: {
+      at: number;
+      trace_id: string;
+      mode: string;
+      source: string;
+      ticker: string;
+      signal_id: number | null;
+      stage: string;
+      outcome: string;
+      reason: string;
+      position_id: number | null;
+      positionStatus: string | null;
+    }[];
+  };
   mainPaper: {
     bankrollUsd: number;
     availableUsd: number;
