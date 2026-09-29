@@ -1105,6 +1105,17 @@ def recent_alert_exists(
     return row is not None
 
 
+def _register_unseen_signal_filter(conn, seen_ids: set[int]) -> None:
+    """Filter before LIMIT without large SQL parameter lists or schema writes.
+
+    A connection-local SQLite predicate keeps exclusion exact even when the
+    45-day traded-ID history is larger than SQLite's bind-variable limit.
+    Each caller consumes its query before another source reuses the predicate.
+    """
+    conn.create_function('rom_signal_is_unseen', 1,
+                         lambda identity: int(identity not in seen_ids))
+
+
 def fetch_tradeable_momentum_signals(
     conn,
     *,
@@ -1116,6 +1127,9 @@ def fetch_tradeable_momentum_signals(
 ) -> list[dict]:
     if not allowed_types:
         return []
+    if limit <= 0:
+        return []
+    _register_unseen_signal_filter(conn, seen_ids)
     placeholders = ",".join("?" for _ in allowed_types)
     rows = conn.execute(
         f"""SELECT a.* FROM alerts a
@@ -1123,15 +1137,14 @@ def fetch_tradeable_momentum_signals(
               AND a.resolved = 0
               AND (julianday('now') - julianday(a.created_at)) * 86400 <= ?
               AND a.signal_type IN ({placeholders})
-            ORDER BY a.created_at DESC
+              AND rom_signal_is_unseen(a.id)
+            ORDER BY a.created_at DESC, a.id DESC
             LIMIT ?""",
-        [min_confidence, max_age_sec, *allowed_types, limit * 2],
+        [min_confidence, max_age_sec, *allowed_types, limit],
     ).fetchall()
     out: list[dict] = []
     for r in rows:
         d = dict(r)
-        if int(d["id"]) in seen_ids:
-            continue
         out.append(d)
         if len(out) >= limit:
             break
@@ -1194,20 +1207,22 @@ def fetch_tradeable_whale_signals(
     seen_ids: set[int],
     limit: int = 50,
 ) -> list[dict]:
+    if limit <= 0:
+        return []
+    _register_unseen_signal_filter(conn, seen_ids)
     rows = conn.execute(
         """SELECT * FROM whale_trades
            WHERE confidence >= ?
              AND resolved = 0
              AND (julianday('now') - julianday(created_at)) * 86400 <= ?
-           ORDER BY created_at DESC
+             AND rom_signal_is_unseen(id)
+           ORDER BY created_at DESC, id DESC
            LIMIT ?""",
-        (min_confidence, max_age_sec, limit * 2),
+        (min_confidence, max_age_sec, limit),
     ).fetchall()
     out: list[dict] = []
     for r in rows:
         d = dict(r)
-        if int(d["id"]) in seen_ids:
-            continue
         out.append(d)
         if len(out) >= limit:
             break
