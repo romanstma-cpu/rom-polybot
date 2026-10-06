@@ -13,8 +13,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const filters = process.argv.slice(2);
+// These drive the packaged app, which the release workflow tests after it
+// has built the installer.
+const PACKAGED_ONLY = new Set(['update-handoff.e2e.mjs']);
 const suites = fs.readdirSync(path.resolve('e2e'))
-  .filter((name) => name.endsWith('.e2e.mjs'))
+  .filter((name) => name.endsWith('.e2e.mjs') && !PACKAGED_ONLY.has(name))
   .filter((name) => !filters.length || filters.some((f) => name.includes(f)))
   .sort();
 if (!suites.length) {
