@@ -1,31 +1,68 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState, type ComponentType } from 'react';
 import { StrategyActivityProvider } from './state/StrategyActivity';
 import { TitleBar } from './components/TitleBar';
 import { Sidebar } from './components/Sidebar';
 import { WorkspaceStatus } from './components/WorkspaceStatus';
+import { PageErrorBoundary } from './components/RendererErrorBoundary';
 import { AppStateProvider, useApp } from './state/AppStateProvider';
 import { ToastProvider } from './state/ToastProvider';
 import { UpdateProvider, useUpdates } from './state/UpdateProvider';
 import { OnboardingModal } from './pages/Onboarding';
-import { DashboardPage } from './pages/Dashboard';
 import { OverviewPage } from './pages/Overview';
-import { EvidencePage } from './pages/Evidence';
-import { MainEnginePage } from './pages/MainEngine';
-import { SettingsPage } from './pages/Settings';
-import { PositionsPage } from './pages/Positions';
-import { SignalsPage } from './pages/Signals';
-import { HistoryPage } from './pages/History';
-import { ProfilesPage } from './pages/Profiles';
-import { LogsPage } from './pages/Logs';
-import { ApiKeysPage } from './pages/ApiKeys';
-import { AboutPage } from './pages/About';
-import { GuidePage } from './pages/Guide';
-import { VisualizerPage } from './pages/Visualizer';
-import { Crypto15mPage } from './pages/Crypto15m';
-import { AccountsPage } from './pages/Accounts';
-import { BacktestPage } from './pages/Backtest';
-import { TerminalPage } from './pages/Terminal';
-import { ScriptsPage } from './pages/Scripts';
+
+// Overview and onboarding are the first screens, so they ship in the main
+// bundle. Every other page (and the charting library most of them use) loads
+// on first visit, and all of them are fetched while the app is idle after
+// startup, so switching pages stays instant without parsing them at launch.
+const pageModules = {
+  Dashboard: () => import('./pages/Dashboard'),
+  Evidence: () => import('./pages/Evidence'),
+  MainEngine: () => import('./pages/MainEngine'),
+  Settings: () => import('./pages/Settings'),
+  Positions: () => import('./pages/Positions'),
+  Signals: () => import('./pages/Signals'),
+  History: () => import('./pages/History'),
+  Profiles: () => import('./pages/Profiles'),
+  Logs: () => import('./pages/Logs'),
+  ApiKeys: () => import('./pages/ApiKeys'),
+  About: () => import('./pages/About'),
+  Guide: () => import('./pages/Guide'),
+  Visualizer: () => import('./pages/Visualizer'),
+  Crypto15m: () => import('./pages/Crypto15m'),
+  Accounts: () => import('./pages/Accounts'),
+  Backtest: () => import('./pages/Backtest'),
+  Terminal: () => import('./pages/Terminal'),
+  Scripts: () => import('./pages/Scripts'),
+};
+
+function lazyPage<M, K extends keyof M>(load: () => Promise<M>, name: K) {
+  return lazy(() => load().then((m) => ({ default: m[name] as ComponentType<any> })));
+}
+
+const DashboardPage = lazyPage(pageModules.Dashboard, 'DashboardPage');
+const EvidencePage = lazyPage(pageModules.Evidence, 'EvidencePage');
+const MainEnginePage = lazyPage(pageModules.MainEngine, 'MainEnginePage');
+const SettingsPage = lazyPage(pageModules.Settings, 'SettingsPage');
+const PositionsPage = lazyPage(pageModules.Positions, 'PositionsPage');
+const SignalsPage = lazyPage(pageModules.Signals, 'SignalsPage');
+const HistoryPage = lazyPage(pageModules.History, 'HistoryPage');
+const ProfilesPage = lazyPage(pageModules.Profiles, 'ProfilesPage');
+const LogsPage = lazyPage(pageModules.Logs, 'LogsPage');
+const ApiKeysPage = lazyPage(pageModules.ApiKeys, 'ApiKeysPage');
+const AboutPage = lazyPage(pageModules.About, 'AboutPage');
+const GuidePage = lazyPage(pageModules.Guide, 'GuidePage');
+const VisualizerPage = lazyPage(pageModules.Visualizer, 'VisualizerPage');
+const Crypto15mPage = lazyPage(pageModules.Crypto15m, 'Crypto15mPage');
+const AccountsPage = lazyPage(pageModules.Accounts, 'AccountsPage');
+const BacktestPage = lazyPage(pageModules.Backtest, 'BacktestPage');
+const TerminalPage = lazyPage(pageModules.Terminal, 'TerminalPage');
+const ScriptsPage = lazyPage(pageModules.Scripts, 'ScriptsPage');
+
+function prefetchPages() {
+  for (const load of Object.values(pageModules)) {
+    load().catch(() => { /* a page that fails here reports through the error boundary when opened */ });
+  }
+}
 
 export type PageId =
   | 'dashboard' | 'main' | 'positions' | 'signals' | 'history'
@@ -79,6 +116,11 @@ function Shell() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  useEffect(() => {
+    const handle = window.requestIdleCallback(prefetchPages, { timeout: 4000 });
+    return () => window.cancelIdleCallback(handle);
+  }, []);
+
   const showOnboarding = state ? !state.acceptedDisclaimer : false;
 
   return (
@@ -90,7 +132,11 @@ function Shell() {
           <WorkspaceStatus />
           <UpdateNotice onOpen={() => setPage('settings')} />
           <div className="min-h-0 flex-1 overflow-hidden bg-rom-radial-r">
-            <PageRouter page={page} setPage={setPage} />
+            <PageErrorBoundary key={page}>
+              <Suspense fallback={<div className="h-full" aria-busy="true" />}>
+                <PageRouter page={page} setPage={setPage} />
+              </Suspense>
+            </PageErrorBoundary>
           </div>
         </main>
       </div>

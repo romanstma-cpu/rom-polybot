@@ -15,6 +15,51 @@ interface State {
  * A visible recovery screen lets the operator reload the renderer without
  * quitting the desktop process (and without changing trading state).
  */
+/**
+ * Contains a failure to the page that caused it. The sidebar, title bar and
+ * emergency stop stay usable, so one bad report never costs the operator the
+ * rest of the app. Keyed by page in the shell, so navigating away resets it.
+ */
+export class PageErrorBoundary extends Component<Props, State> {
+  state: State = { error: null };
+
+  static getDerivedStateFromError(error: Error): State {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo): void {
+    console.error('Page render failure', error, info.componentStack);
+  }
+
+  private retry = (): void => {
+    this.setState({ error: null });
+  };
+
+  render(): ReactNode {
+    if (!this.state.error) return this.props.children;
+
+    return (
+      <div className="flex h-full items-center justify-center px-6">
+        <section role="alert" className="w-full max-w-lg rounded-2xl border border-rom-border bg-rom-surface p-7 shadow-rom-soft">
+          <h1 className="text-xl font-semibold text-white">This page ran into a problem</h1>
+          <p className="mt-3 text-sm leading-6 text-rom-muted">
+            Trading and the backend are unaffected. Try the page again, or choose another page from the sidebar.
+          </p>
+          <button type="button" className="rom-btn-primary mt-6" onClick={this.retry}>
+            Try again
+          </button>
+          <details className="mt-5 rounded-lg border border-rom-border bg-rom-void p-3 text-xs text-rom-muted">
+            <summary className="cursor-pointer select-none">Technical details</summary>
+            <pre className="mt-3 whitespace-pre-wrap break-words text-rom-lossText">
+              {this.state.error.message || String(this.state.error)}
+            </pre>
+          </details>
+        </section>
+      </div>
+    );
+  }
+}
+
 export class RendererErrorBoundary extends Component<Props, State> {
   state: State = { error: null };
 
