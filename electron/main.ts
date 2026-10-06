@@ -7,6 +7,7 @@ import { setStartWithWindows } from './system/autostart';
 import { startDiscordRpc, stopDiscordRpc } from './system/discord';
 import { pythonBackend } from './system/python-backend';
 import * as store from './system/settings-store';
+import { RENDERER_CSP } from '../shared/csp';
 import { destroyTray, installTray, rebuild as rebuildTray } from './system/tray';
 
 process.env.DIST_ELECTRON = __dirname;
@@ -180,12 +181,7 @@ function installCsp(): void {
     cb({
       responseHeaders: {
         ...details.responseHeaders,
-        'Content-Security-Policy': [
-          "default-src 'self'; script-src 'self'; " +
-          "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
-          "font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; " +
-          "connect-src 'self'",
-        ],
+        'Content-Security-Policy': [RENDERER_CSP],
       },
     });
   });
