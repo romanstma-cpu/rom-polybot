@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {backendRunning} from './wait.mjs';
 const root=fs.mkdtempSync(path.join(os.tmpdir(),'rom-replay-'));
 for(const dir of ['Roaming','Local'])fs.mkdirSync(path.join(root,dir));
 const app=await electron.launch({executablePath:process.env.ROM_E2E_EXE || path.resolve('node_modules/electron/dist/electron.exe'),args:[...(process.env.ROM_E2E_EXE ? [] : [process.cwd()]),`--user-data-dir=${root}/profile`],env:{...process.env,APPDATA:path.join(root,'Roaming'),LOCALAPPDATA:path.join(root,'Local')}});
@@ -10,7 +11,7 @@ try {
   const page=await app.firstWindow(); const errors=[];
   page.on('pageerror',e=>errors.push(e.message));
   await page.getByRole('button',{name:'Continue to API setup'}).click();
-  await page.waitForFunction(async () => (await window.rom.backend.info()).status === 'running');
+  await backendRunning(page);
   const actual=await page.evaluate(()=>window.rom.crypto15m.backtestMain({sinceDays:7,config:{replayScenario:'stress'}}));
   assert.equal(actual.dataStatus,'insufficient_data');
   assert.equal(actual.assumptions.latencyMs,2000);

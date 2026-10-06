@@ -51,7 +51,8 @@ try {
   await page.getByText('Main · Whale',{exact:true}).waitFor();
   assert.equal(await page.getByText('#1',{exact:true}).count(),1);
   await page.getByText('Election Value Scout',{exact:true}).waitFor();
-  await page.getByText('Collecting',{exact:true}).waitFor();
+  // Other Evidence cards also show a Collecting state; check this candidate's own row.
+  await page.locator('div.grid').filter({hasText:'Election Value Scout'}).getByText('Collecting',{exact:true}).waitFor();
   await page.getByText('Needs 22 more settled fills, 12 more distinct markets, 5.0 more observation days.',{exact:true}).waitFor();
   await page.setViewportSize({width:420,height:900});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth),false);

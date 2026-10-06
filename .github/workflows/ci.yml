@@ -8,6 +8,12 @@ on:
   push:
     branches: [master]
   pull_request:
+  # Weekly, so a test that depends on today's date fails here first rather
+  # than in the middle of a release. One did: it pinned 2026-08-01 and broke
+  # once the recorder's 60-day retention window moved past it.
+  schedule:
+    - cron: '17 9 * * 1'
+  workflow_dispatch:
 
 permissions:
   contents: read

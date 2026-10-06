@@ -24,6 +24,7 @@
     "py:backtest15m": "node scripts/backtest.mjs --c15",
     "py:volume": "node scripts/volume-farm.mjs",
     "test:e2e": "npm run build && node e2e/arming.e2e.mjs",
+    "test:e2e:all": "node scripts/e2e-all.mjs",
     "py:dist": "node scripts/build-python.mjs",
     "dist": "npm run build && npm run py:dist && electron-builder"
   },

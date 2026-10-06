@@ -1,3 +1,4 @@
+import time
 from datetime import datetime, timezone
 
 import pytest
@@ -185,11 +186,15 @@ def test_recorder_copies_payload_and_flushes_to_isolated_database(tmp_path, monk
     monkeypatch.setattr(main_recorder, '_queue', main_recorder.deque())
     monkeypatch.setattr(main_recorder, '_dropped', 0)
     monkeypatch.setattr(main_recorder, '_enabled', True)
+    # flush() prunes anything older than the 60-day evidence window measured
+    # from the wall clock, so a fixed date here turns into a failing test two
+    # months later. Record at the current time instead.
+    at=time.time()
     payload={'value': 1}
-    main_recorder.record('trade','A',payload,at=T)
+    main_recorder.record('trade','A',payload,at=at)
     payload['value']=2
     main_recorder.flush()
-    rows=main_recorder.load(1,end=T+1)
+    rows=main_recorder.load(1,end=at+1)
     assert rows[0]['payload']=={'value':1}
 
 

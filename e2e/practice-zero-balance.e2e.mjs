@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {backendRunning, waitUntil} from './wait.mjs';
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'rom-practice-zero-'));
 for (const dir of ['Roaming', 'Local', 'profile']) {
@@ -19,8 +20,7 @@ try {
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.getByRole('button', {name: 'Continue to API setup'}).click();
-  await page.waitForFunction(async () => (await window.rom.backend.info()).status === 'running',
-                            null, {timeout: 30000});
+  await backendRunning(page);
   const [backend, account, status] = await page.evaluate(async () => Promise.all([
     window.rom.backend.info(), window.rom.data.account(), window.rom.trading.status(),
   ]));
@@ -60,7 +60,7 @@ try {
   assert.equal(await practice.isEnabled(), true);
   assert.equal(await live.isDisabled(), true);
   await practice.click();
-  await page.waitForFunction(async () => (await window.rom.config.get()).mainPaperTrading === true);
+  await waitUntil(page, async () => (await window.rom.config.get()).mainPaperTrading === true);
   const config = await page.evaluate(() => window.rom.config.get());
   assert.equal(config.enableTrading, false);
   const practiceStatus = {

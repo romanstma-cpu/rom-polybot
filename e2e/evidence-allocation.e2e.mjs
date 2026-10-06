@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {waitUntil} from './wait.mjs';
 
 const root=fs.mkdtempSync(path.join(os.tmpdir(),'rom-evidence-allocation-'));
 for(const dir of ['Roaming','Local'])fs.mkdirSync(path.join(root,dir));
@@ -41,7 +42,7 @@ try {
   const toggle=page.getByRole('switch',{name:/Use evidence allocation/});
   assert.equal(await toggle.getAttribute('aria-checked'),'false');
   await toggle.click();
-  await page.waitForFunction(async()=> (await window.rom.config.get()).evidenceAllocationEnabled===true);
+  await waitUntil(page,async()=> (await window.rom.config.get()).evidenceAllocationEnabled===true);
   assert.equal((await page.evaluate(()=>window.rom.config.get())).enableTrading,false);
   await page.setViewportSize({width:420,height:900});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth),false);

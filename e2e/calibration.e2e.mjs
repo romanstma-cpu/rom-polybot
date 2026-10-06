@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {backendRunning} from './wait.mjs';
 const root=fs.mkdtempSync(path.join(os.tmpdir(),'rom-calibration-'));
 for(const dir of ['Roaming','Local'])fs.mkdirSync(path.join(root,dir));
 const app=await electron.launch({executablePath:process.env.ROM_E2E_EXE || path.resolve('node_modules/electron/dist/electron.exe'),args:[...(process.env.ROM_E2E_EXE ? [] : [process.cwd()]),`--user-data-dir=${root}/profile`],env:{...process.env,APPDATA:path.join(root,'Roaming'),LOCALAPPDATA:path.join(root,'Local')}});
@@ -13,7 +14,7 @@ try {
   await page.getByRole('button',{name:'Save and connect',exact:true}).click();
   await page.getByRole('alert').filter({hasText:'Enter both your Key ID and Secret Key.'}).waitFor();
   assert.equal(await page.getByLabel('Key ID',{exact:true}).evaluate(e=>e===document.activeElement),true);
-  await page.waitForFunction(async()=> (await window.rom.backend.info()).status==='running');
+  await backendRunning(page);
   const actual=await page.evaluate(()=>window.rom.trading.calibration());
   assert.equal(actual.status,'collecting');assert.equal(actual.eventSamples,0);
   await page.getByRole('button',{name:'Advanced tools'}).click();

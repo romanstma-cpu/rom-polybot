@@ -16,6 +16,8 @@ const commands = [
 // the Mac workflow performs a packaged-app launch smoke test after this gate.
 if (process.platform === 'win32' || process.env.ROM_RUN_UI_AUDIT === '1') {
   commands.push(['npm', ['run', 'check:ui']]);
+  // Every Electron suite in e2e/, each retried once (see scripts/e2e-all.mjs).
+  commands.push(['npm', ['run', 'test:e2e:all']]);
 }
 
 for (const [command, args] of commands) {

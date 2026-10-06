@@ -1,6 +1,7 @@
 import {_electron as electron} from 'playwright-core';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';import os from 'node:os';import path from 'node:path';
+import {waitUntil} from './wait.mjs';
 
 const sandbox=fs.mkdtempSync(path.join(os.tmpdir(),'rom-paper-activity-'));
 for(const d of ['Roaming','Local','profile'])fs.mkdirSync(path.join(sandbox,d));
@@ -27,7 +28,7 @@ try {
 
   await p.getByRole('navigation').getByRole('button',{name:'Overview',exact:true}).click();
   await p.getByRole('heading',{name:'What Polybot is doing',exact:true}).waitFor();
-  await p.waitForFunction(async()=> (await window.rom.trading.status()).mainState==='blocked');
+  await waitUntil(p,async()=> (await window.rom.trading.status()).mainState==='blocked');
   await p.getByText('blocked',{exact:true}).waitFor();
   // The credential reason is shown in more than one card; assert it appears
   // rather than requiring a single match.

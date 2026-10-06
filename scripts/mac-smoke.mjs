@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import {backendRunning} from '../e2e/wait.mjs';
 
 const executablePath = process.argv[2];
 if (!executablePath) throw new Error('Pass the packaged app executable path');
@@ -36,7 +37,7 @@ try {
   const continueButton = page.getByRole('button', {name: 'Continue to API setup'});
   await continueButton.waitFor({state: 'visible', timeout: 5000}).catch(() => {});
   if (await continueButton.isVisible()) await continueButton.click();
-  await page.waitForFunction(async () => (await window.rom.backend.info()).status === 'running', {timeout: 30000});
+  await backendRunning(page);
   const config = await page.evaluate(() => window.rom.config.get());
   assert.equal(config.enableTrading, false);
   for (const orderStyle of ['maker_join', 'limit_cross', 'limit_mid', 'market']) {
