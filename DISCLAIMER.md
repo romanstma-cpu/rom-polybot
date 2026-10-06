@@ -3,8 +3,8 @@
 **Read this before using ROM PolyBot with real money.**
 
 ROM PolyBot is free, open-source, experimental software for placing trades on
-[Polymarket](https://polymarket.com). By downloading, building, or running it, you
-acknowledge and accept everything below.
+[Polymarket US](https://polymarket.us) through its API. By downloading, building,
+or running it, you acknowledge and accept everything below.
 
 ## Not financial advice
 ROM PolyBot, its strategies, signals, scores, and any documentation are for
@@ -20,12 +20,13 @@ scale, including while you are away from your computer. Only trade with money
 you can afford to lose entirely.
 
 ## The strategies are unproven
-The bundled strategies (whale tracker, momentum scanner, 15-minute crypto, etc.)
-are **heuristics**. They:
+The bundled strategies (Large Trade, Momentum, 15-minute crypto, and your own
+scripts) are **heuristics**. They:
 
-- have **not** been validated with out-of-sample backtesting;
-- do **not** currently account for Polymarket trading fees in their entry/sizing
-  decisions, which can erode or eliminate any apparent edge;
+- have **not** demonstrated profitable live trading. Calibration, replay and
+  backtest results are estimates built from limited recorded data;
+- estimate Polymarket US fees before a live entry, but fee schedules, slippage,
+  partial fills and stale quotes can still erode or eliminate any apparent edge;
 - carry **no guarantee of profitability**.
 
 Any performance figures, "edge" scores, or calibration claims are illustrative
@@ -41,33 +42,37 @@ or claims arising from its use.
 ## Your responsibilities
 You are solely responsible for:
 
-- Complying with [Polymarket's Terms of Service](https://polymarket.com/terms) and API
-  terms, including any rules on automated/algorithmic trading. **Confirm that
+- Complying with the [Polymarket US Terms of Service](https://polymarket.us/tos) and
+  API terms, including any rules on automated/algorithmic trading. **Confirm that
   automated trading with your account is permitted before enabling it.**
 - Complying with all laws and regulations in your jurisdiction, including
   eligibility, age, and licensing requirements.
-- The security of your Polygon wallet private key and the machine you run this on.
-  Anyone with that key controls the wallet's funds — use a dedicated trading wallet.
+- The security of your Polymarket US API Key ID and Secret Key and of the machine
+  you run this on. Anyone with your Secret Key can trade on your account. Revoke a
+  compromised key from the Polymarket US developer portal.
 - Every order the software places on your behalf.
 
-## Start small — there is no practice mode
-There is **no paper, demo, or simulation mode**. Polymarket is mainnet-only (real
-USDC) and there is no demo exchange, so **every engine places real orders with real
-money the moment you enable it**. All engines ship **OFF by default**. Before turning
-any engine on, understand exactly what it does, and begin with a small amount you can
-afford to lose entirely.
+## Practice first, then start small
+Practice runs the main strategy against live market data with a simulated balance
+that is kept separate from your account. Practice fills are estimates: they assume
+your entry price plus the applicable fee, and real exchange execution can differ.
+Polymarket US has no demo exchange, so **live mode places real orders with real
+money the moment you enable it**. Trading starts paused and every engine ships
+**off by default**. Before going live, understand exactly what the strategy does,
+and begin with a small amount you can afford to lose entirely.
 
 ## Usage data
 ROM PolyBot sends **no** telemetry, analytics, or usage data of any kind. It
 collects nothing about you and phones no home server. The only network traffic
-it makes is to Polymarket's own APIs, the market-data feeds it needs to trade,
-and any Discord webhook **you** configure yourself in Settings.
+it makes is to the Polymarket US API, the public market and crypto price feeds it
+needs to trade, GitHub (to check for and download app updates), and any Discord
+webhook **you** configure yourself in Settings.
 
 Your credentials, trade history, and database stay on your machine.
 
 ## No affiliation
 ROM PolyBot is an independent project and is **not affiliated with, endorsed
-by, or sponsored by** Polymarket, Discord, or any data provider. Your use of
+by, or sponsored by** Polymarket, Polymarket US, Discord, or any data provider. Your use of
 those services is governed by their own terms, and you are responsible for
 complying with them.
 

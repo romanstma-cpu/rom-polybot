@@ -5,7 +5,7 @@ keep changes small, tested, and easy to review.
 
 ## Development setup
 
-**Prerequisites:** Node.js 18+ and Python 3.10+ on PATH.
+**Prerequisites:** Node.js 22 and Python 3.12+ on PATH (what CI uses).
 
 ```bash
 npm install
@@ -17,9 +17,15 @@ npm run dev          # vite + electron + python backend; `predev` sets up python
 ```bash
 npm run typecheck    # TypeScript must pass (renderer + electron)
 npm run py:test      # Python tests must pass
+npm run test:e2e:all # Electron end-to-end suites (Windows; run after npm run build)
 ```
 
-Both are also enforced by CI on every pull request.
+The first two are enforced by CI on every pull request. The Windows installer job
+runs every e2e suite, so a UI change that breaks one blocks the release.
+
+E2E suites must wait on real state. `page.waitForFunction` with an async predicate
+returns immediately (a Promise is truthy), so use `waitUntil` / `backendRunning` from
+`e2e/wait.mjs` instead.
 
 ## Guidelines
 
