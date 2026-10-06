@@ -9,6 +9,14 @@ if (process.platform === 'darwin' && process.arch !== 'arm64') {
   console.log('SKIP: Apple Silicon updater E2E requires an arm64 macOS runner');
   process.exit(0);
 }
+// No Linux installer is published, so the updater has nothing to offer there.
+// CI's Linux runner also has no display to start Electron, which made every
+// CI run since these suites joined the gate fail. The Windows and Apple
+// Silicon release builds still run them.
+if (process.platform === 'linux') {
+  console.log('SKIP: in-app updates ship for Windows and Apple Silicon only');
+  process.exit(0);
+}
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'rom-update-download-'));
 const currentVersion = JSON.parse(fs.readFileSync(path.resolve('package.json'), 'utf8')).version;
