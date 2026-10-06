@@ -9,6 +9,7 @@ import { pythonBackend } from './system/python-backend';
 import * as store from './system/settings-store';
 import { RENDERER_CSP } from '../shared/csp';
 import { destroyTray, installTray, rebuild as rebuildTray } from './system/tray';
+import { restoreBounds } from './system/window-bounds';
 
 process.env.DIST_ELECTRON = __dirname;
 process.env.DIST = join(__dirname, '..', 'dist');
@@ -49,20 +50,16 @@ function createMainWindow(): BrowserWindow {
     return mainWindow;
   }
   const state = store.get();
-  const bounds = state.windowBounds;
-  const primary = screen.getPrimaryDisplay();
-  const width = bounds?.width ?? Math.min(1380, primary.workArea.width - 40);
-  const height = bounds?.height ?? Math.min(900, primary.workArea.height - 40);
-  const x = bounds?.x;
-  const y = bounds?.y;
+  const restored = restoreBounds(
+    state.windowBounds,
+    screen.getAllDisplays().map((display) => display.workArea),
+    screen.getPrimaryDisplay().workArea,
+  );
 
   mainWindow = new BrowserWindow({
-    width,
-    height,
+    ...restored,
     minWidth: 1100,
     minHeight: 720,
-    x,
-    y,
     backgroundColor: '#0A0A0F',
     show: false,
     frame: false,

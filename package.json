@@ -14,6 +14,7 @@
     "build": "vite build",
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.json --noEmit",
     "check:e2e-drift": "node scripts/check-e2e-drift.mjs",
+    "test:electron": "node scripts/test-config-validate.mjs && node scripts/test-window-bounds.mjs",
     "check:ui": "node scripts/ui-audit.mjs",
     "check:capacity": "node scripts/capacity-probe.mjs",
     "check:resilience": "npm run py:test -- -q tests/test_runtime_resilience.py tests/test_failure_injection.py tests/test_execution_health.py tests/test_watchdog.py",

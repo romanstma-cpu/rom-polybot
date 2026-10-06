@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 const commands = [
   ['npm', ['run', 'typecheck']],
   ['npm', ['run', 'check:e2e-drift']],
+  ['npm', ['run', 'test:electron']],
   ['npm', ['run', 'py:test', '--', '-q']],
   ['npm', ['run', 'check:capacity']],
   ['npm', ['run', 'build']],
