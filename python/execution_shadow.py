@@ -194,5 +194,8 @@ def load_report(network):
         row['filled']=int(_number(row.get('filled'))>0)
         if markout is not None: row['adverse']=int(_number(markout)<0)
         rows.append(row)
-    result=fit(rows,now); _cache=(key,now,result)
-    return result['report']
+    # Cache what callers receive. Caching the whole fit result returned a
+    # different shape on every call inside the five-minute window, and the
+    # Evidence page could not render it.
+    report=fit(rows,now)['report']; _cache=(key,now,report)
+    return report

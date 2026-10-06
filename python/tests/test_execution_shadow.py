@@ -57,3 +57,19 @@ def test_later_rows_cannot_change_an_earlier_report():
             row["filled"] = 1 - row["filled"]
             row["adverse"] = 1 - row["adverse"]
     assert execution_shadow.fit(evidence, cutoff) == expected
+
+
+def test_cached_report_has_the_same_shape_as_a_fresh_one(tmp_path, monkeypatch):
+    # The Evidence page reads fillModel/adverseModel from every response. The
+    # second call inside the cache window used to return the wrapper instead,
+    # which crashed the page when it was refreshed or reopened.
+    import db
+    monkeypatch.setattr(db, "db_path", lambda: tmp_path / "rom-test.db")
+    monkeypatch.setattr(execution_shadow, "_cache", None)
+    db.init_db()
+    first = execution_shadow.load_report("mainnet")
+    second = execution_shadow.load_report("mainnet")
+    assert second == first
+    for report in (first, second):
+        assert report["fillModel"]["status"] and report["adverseModel"]["status"]
+        assert "report" not in report
