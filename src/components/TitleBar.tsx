@@ -77,7 +77,7 @@ export function TitleBar() {
             onClick={() => void emergencyStop()}
             disabled={stopping}
             title="Pause the main strategy and cancel its pending orders"
-            className="mr-2 inline-flex h-7 items-center gap-1.5 rounded-md border border-rom-loss/60 bg-rom-loss/15 px-2 text-[10px] font-semibold text-rom-lossText hover:bg-rom-loss/25 disabled:opacity-60"
+            className="mr-2 inline-flex h-7 items-center gap-1.5 rounded-md border border-rom-loss/60 bg-rom-loss/15 px-2 text-[11px] font-semibold text-rom-lossText hover:bg-rom-loss/25 disabled:opacity-60"
           >
             <AlertTriangle className="h-3.5 w-3.5" />
             {stopping ? 'Stopping…' : 'Emergency stop'}

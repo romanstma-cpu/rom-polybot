@@ -923,6 +923,25 @@ def test_refresh_balance_keeps_last_portfolio_when_value_read_fails(monkeypatch)
     assert run_async(trader.refresh_balance(cfg, force=True)) == (5135, 454)
 
 
+@pytest.mark.parametrize("configured, level", [(False, "INFO"), (True, "WARNING")])
+def test_balance_failure_is_a_warning_only_when_keys_are_saved(monkeypatch, caplog, configured, level):
+    trader._balance_cache.clear()
+    trader._balance_fail_log_at.clear()
+
+    async def failing_balance():
+        raise RuntimeError("Polymarket US API credentials are not configured")
+
+    monkeypatch.setattr(trader, "get_balance", failing_balance)
+    monkeypatch.setattr(trader, "get_env", lambda: "mainnet")
+    monkeypatch.setattr(trader, "credentials_present", lambda env=None: configured)
+    caplog.set_level("INFO", logger=trader.logger.name)
+
+    assert run_async(trader.refresh_balance({"balance_poll_interval": 0}, force=True)) == (0, 0)
+    records = [r for r in caplog.records if r.name == trader.logger.name and "balance" in r.getMessage()]
+    assert [r.levelname for r in records] == [level]
+    assert not trader.last_balance_read_ok("mainnet")
+
+
 def test_exposure_counts_committed_notional_of_submitted_orders(fresh_db, env_net):
     seed_position(status="submitted", cost_usd=0.0, target_contracts=10, limit_price_cents=50)
     seed_position(status="filled", cost_usd=4.0, target_contracts=10, limit_price_cents=60)

@@ -31,7 +31,7 @@ from polymarket_api import (
     get_fast_quote as get_quote, get_fills_for_order, get_market_meta, get_order, get_positions,
     place_limit_order,
 )
-from polymarket_auth import get_env, trading_address
+from polymarket_auth import credentials_present, get_env, trading_address
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +81,12 @@ async def refresh_balance(cfg: dict, force: bool = False) -> tuple[int, int]:
         wt = time.time()
         if wt - _balance_fail_log_at.get(env, 0.0) >= _BALANCE_FAIL_LOG_EVERY:
             _balance_fail_log_at[env] = wt
-            logger.warning(f"balance fetch failed: {e}")
+            if credentials_present(env):
+                logger.warning(f"balance fetch failed: {e}")
+            else:
+                # A fresh install has no keys yet. That is a setup step, not a
+                # fault, so it should not show up as a warning in every log.
+                logger.info("balance not read yet: save a Polymarket US API key on the API page")
         return prev_cents, prev_port
 
 

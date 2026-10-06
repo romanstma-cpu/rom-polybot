@@ -109,7 +109,7 @@ export function OnboardingModal({onDone}:{onDone:()=>void}) {
               ['3', 'Run practice first', 'Watch simulated trades before you enable live orders.'],
             ].map(([number, title, detail]) => (
               <li key={number} className="flex gap-2 sm:block">
-                <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full border border-rom-border text-[10px] font-semibold text-rom-purple">{number}</span>
+                <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full border border-rom-border text-[11px] font-semibold text-rom-purple">{number}</span>
                 <div className="sm:mt-2">
                   <p className="font-medium text-rom-text">{title}</p>
                   <p className="mt-1 leading-relaxed text-rom-dim">{detail}</p>

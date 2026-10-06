@@ -122,7 +122,7 @@ function PaperStat({ label, value }: { label: string; value: string }) {
 
 function FunnelStat({ label, value, warn = false }: { label: string; value: number; warn?: boolean }) {
   return <div className={cls('rounded-lg border px-3 py-2.5', warn ? 'border-rom-warn/30 bg-rom-warn/5' : 'border-rom-border bg-rom-void/25')}>
-    <div className="text-[10px] uppercase tracking-wide text-rom-dim">{label}</div>
+    <div className="text-[11px] uppercase tracking-wide text-rom-dim">{label}</div>
     <div className={cls('mt-1 font-mono text-lg font-semibold tabular-nums', warn ? 'text-rom-warn' : 'text-white')}>{value.toLocaleString()}</div>
   </div>;
 }
