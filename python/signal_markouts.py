@@ -39,7 +39,17 @@ SOURCE_LABELS = {
     'whale': 'Large Trade',
     'momentum': 'Momentum',
     'tape': f'All trades over ${TAPE_MIN_USD:,.0f} (reference)',
+    'tape_fade': f'Fade trades over ${TAPE_MIN_USD:,.0f} (test idea)',
 }
+# Test ideas are scored from the same events as the source they reverse, so
+# an idea earns a practice strategy only once it beats costs here.
+REVERSED = {'tape_fade': 'tape'}
+
+
+def reverse(row: dict) -> dict:
+    """The same markout taken the other way. Fees are symmetric in p(1-p)."""
+    cost = row['half_spread_cents'] + row['fee_cents']
+    return {**row, 'gross_cents': -row['gross_cents'], 'net_cents': -row['gross_cents'] - cost}
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS signal_markouts (
@@ -249,11 +259,14 @@ def report(now: float | None = None) -> dict:
         )]
     sources = []
     for source, label in SOURCE_LABELS.items():
-        mine = [r for r in rows if r['source'] == source]
+        if source in REVERSED:
+            mine = [reverse(r) for r in rows if r['source'] == REVERSED[source]]
+        else:
+            mine = [r for r in rows if r['source'] == source]
         horizons = [{'horizonSec': h, **summarize([r for r in mine if r['horizon_sec'] == h])}
                     for h in HORIZONS]
         status, reason = verdict(next(h for h in horizons if h['horizonSec'] == VERDICT_HORIZON))
-        sources.append({'source': source, 'label': label, 'reference': source == 'tape',
+        sources.append({'source': source, 'label': label, 'reference': source in ('tape', 'tape_fade'),
                         'status': status, 'reason': reason, 'horizons': horizons})
     return {
         'asOf': now,

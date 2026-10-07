@@ -134,6 +134,21 @@ def test_report_waits_for_enough_markets_then_judges_net_of_costs(fresh_db):
     assert rep['controlsLiveTrading'] is False
 
 
+def test_fade_idea_reverses_the_tape_and_pays_the_same_costs(fresh_db):
+    _book('F1', 0.49, 0.51, T0 - 5)
+    _trade('F1', price=0.51, qty=2000)  # taker buys YES: the tape calls +1
+    for h in sm.HORIZONS:
+        _book('F1', 0.45, 0.47, T0 + h - 1)
+    sm.collect(T0 + 5 * 3600)
+    rep = sm.report(T0 + 6 * 3600)
+    tape = next(s for s in rep['sources'] if s['source'] == 'tape')['horizons'][0]
+    fade = next(s for s in rep['sources'] if s['source'] == 'tape_fade')['horizons'][0]
+    assert tape['grossCents'] == pytest.approx(-4.0)
+    assert fade['grossCents'] == pytest.approx(4.0)
+    assert fade['costCents'] == pytest.approx(tape['costCents'])
+    assert fade['netCents'] == pytest.approx(4.0 - tape['costCents'])
+
+
 def test_verdicts():
     base = {'samples': 40, 'markets': 12, 'netCents': 0.0}
     assert sm.verdict({**base, 'ciLowCents': 0.2, 'ciHighCents': 1.0})[0] == 'predictive'

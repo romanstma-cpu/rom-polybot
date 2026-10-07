@@ -862,9 +862,9 @@ export interface SignalMarkoutHorizon {
 }
 
 export interface SignalMarkoutSource {
-  source: 'whale' | 'momentum' | 'tape';
+  source: 'whale' | 'momentum' | 'tape' | 'tape_fade';
   label: string;
-  /** The tape line is a baseline, not a strategy the bot trades. */
+  /** The tape lines are a baseline and a test idea, not strategies the bot trades. */
   reference: boolean;
   status: 'collecting' | 'predictive' | 'no_edge' | 'negative';
   reason: string;
