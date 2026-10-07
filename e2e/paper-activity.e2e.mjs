@@ -14,6 +14,9 @@ const app=await electron.launch({
 try {
   const p=await app.firstWindow();const errors=[];p.on('pageerror',e=>errors.push(e.message));
   await p.getByRole('button',{name:'Continue to API setup'}).click();
+  // Switching modes and reading activity both go through the backend, which
+  // starts much more slowly on a CI runner than on a desktop.
+  await backendRunning(p,90000);
   await p.getByRole('navigation').getByRole('button',{name:'Strategy',exact:true}).click();
   const initial=await p.evaluate(()=>window.rom.config.get());
   assert.equal(initial.enableTrading,false);assert.equal(initial.mainPaperTrading,false);
@@ -28,9 +31,6 @@ try {
 
   await p.getByRole('navigation').getByRole('button',{name:'Overview',exact:true}).click();
   await p.getByRole('heading',{name:'What Polybot is doing',exact:true}).waitFor();
-  // The first cycle follows the backend's initial market sync, which takes
-  // much longer on a CI runner than on a desktop.
-  await backendRunning(p,90000);
   await waitUntil(p,async()=> (await window.rom.trading.status()).mainState==='blocked',{timeout:90000});
   await p.getByText('blocked',{exact:true}).waitFor();
   // The credential reason is shown in more than one card; assert it appears

@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {backendRunning} from './wait.mjs';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rom-preset-compare-'));
 for (const d of ['Roaming', 'Local', 'profile']) fs.mkdirSync(path.join(root, d));
@@ -20,6 +21,8 @@ try {
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await page.getByRole('button', {name: 'Continue to API setup'}).click();
+  // The comparison asks the backend; on a cold CI runner it starts slowly.
+  await backendRunning(page, 90000);
   await page.getByRole('button', {name: /Advanced tools/}).click();
   await page.getByRole('navigation').getByRole('button', {name: 'Backtest', exact: true}).click();
   await page.getByRole('button', {name: 'Crypto up/down', exact: true}).click();
