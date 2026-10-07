@@ -36,7 +36,7 @@ try {
   // The credential reason is shown in more than one card; assert it appears
   // rather than requiring a single match.
   await p.getByText(/Connect (a|your) Polymarket US API key/i).first().waitFor();
-  await p.screenshot({path:'.work/overview-2.4.png'});
+  await p.screenshot({path:'.work/overview-2.4.png',timeout:5000}).catch(()=>{}); // evidence only; a hidden window never paints
   const status=await p.evaluate(()=>window.rom.trading.status());
   assert.equal(status.mainMode,'paper');assert.equal(status.mainState,'blocked');
   assert.equal(status.mainPaper.bankrollUsd,1000);
