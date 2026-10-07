@@ -632,6 +632,10 @@ export function registerIpc(): void {
     if (!pythonBackend.isRunning()) throw new Error('Start the engine to evaluate the ML shadow model.');
     return await pythonBackend.request('shadowRanker', {}, 30_000);
   });
+  ipcMain.handle('trading:signalMarkouts', async () => {
+    if (!pythonBackend.isRunning()) throw new Error('Start the engine to score signal markouts.');
+    return await pythonBackend.request('signalMarkouts', {}, 30_000);
+  });
   ipcMain.handle('trading:executionShadow', async () => {
     if (!pythonBackend.isRunning()) throw new Error('Start the engine to evaluate execution shadow models.');
     return await pythonBackend.request('executionShadow', {}, 30_000);

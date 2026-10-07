@@ -847,6 +847,40 @@ export interface ExecutionShadowReport {
   adverseModel: ExecutionShadowModelReport;
 }
 
+export interface SignalMarkoutHorizon {
+  horizonSec: number;
+  samples: number;
+  markets: number;
+  /** Mean midpoint move in the signal's direction, cents per contract. */
+  grossCents: number | null;
+  /** Mean half-spread plus taker fee, cents per contract. */
+  costCents: number | null;
+  /** Net markout averaged per market, with a 95% interval across markets. */
+  netCents: number | null;
+  ciLowCents: number | null;
+  ciHighCents: number | null;
+}
+
+export interface SignalMarkoutSource {
+  source: 'whale' | 'momentum' | 'tape';
+  label: string;
+  /** The tape line is a baseline, not a strategy the bot trades. */
+  reference: boolean;
+  status: 'collecting' | 'predictive' | 'no_edge' | 'negative';
+  reason: string;
+  horizons: SignalMarkoutHorizon[];
+}
+
+export interface SignalMarkoutReport {
+  asOf: number;
+  windowDays: number;
+  verdictHorizonSec: number;
+  minSamples: number;
+  minMarkets: number;
+  controlsLiveTrading: false;
+  sources: SignalMarkoutSource[];
+}
+
 export interface ForwardValidationReport {
   status: 'collecting' | 'promising' | 'not_better';
   reason: string;
@@ -1253,6 +1287,7 @@ export interface ROMApi {
     candidateFunnel: () => Promise<CandidateFunnelReport>;
     shadowRanker: () => Promise<ShadowRankerReport>;
     executionShadow: () => Promise<ExecutionShadowReport>;
+    signalMarkouts: () => Promise<SignalMarkoutReport>;
     forwardValidation: () => Promise<ForwardValidationReport>;
     mlPromotion: () => Promise<MlPromotionReport>;
     practicePerformance: () => Promise<PracticePerformanceReport>;

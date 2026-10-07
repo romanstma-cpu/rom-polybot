@@ -19,6 +19,7 @@ import signal_schedule
 import order_journal
 import account_risk
 import fill_markouts
+import signal_markouts
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -646,6 +647,7 @@ async def _scanner_and_trader_loop() -> None:
     last_redeem_check = 0.0
     last_cleanup = 0.0
     last_fill_markouts = 0.0
+    last_signal_markouts = 0.0
     last_stats_push = asyncio.get_event_loop().time()
 
     try:
@@ -884,6 +886,15 @@ async def _scanner_and_trader_loop() -> None:
                     logger.info("recorded %s post-fill markout observation(s)", saved)
         except Exception as e:
             logger.debug("post-fill markout collection failed: %s", e)
+
+        try:
+            # Score recorded signals against later books before the recorder
+            # prunes them. Needs no API keys: it only reads recorded data.
+            if now - last_signal_markouts >= 60.0:
+                last_signal_markouts = now
+                await asyncio.to_thread(signal_markouts.collect)
+        except Exception as e:
+            logger.debug("signal markout collection failed: %s", e)
 
         try:
             if STATE.auth_ok and now - last_redeem_check >= 180.0:
@@ -1983,6 +1994,10 @@ async def _h_shadow_ranker(_p: dict) -> dict:
     return (await asyncio.to_thread(shadow_ranker.load_model))["report"]
 
 
+async def _h_signal_markouts(_p: dict) -> dict:
+    return await asyncio.to_thread(signal_markouts.report)
+
+
 async def _h_execution_shadow(_p: dict) -> dict:
     import execution_shadow
     return await asyncio.to_thread(execution_shadow.load_report, polymarket_auth.get_env())
@@ -2792,6 +2807,7 @@ _HANDLERS = {
     "candidateFunnel": _h_candidate_funnel,
     "shadowRanker": _h_shadow_ranker,
     "executionShadow": _h_execution_shadow,
+    "signalMarkouts": _h_signal_markouts,
     "forwardValidation": _h_forward_validation,
     "mlPromotion": _h_ml_promotion,
     "practicePerformance": _h_practice_performance,
@@ -3054,6 +3070,7 @@ def _selftest() -> int:
     _try("import replay (backtest engine)", lambda: __import__("replay"))
     _try("import ML shadow ranker", lambda: __import__("shadow_ranker"))
     _try("import execution shadow models", lambda: __import__("execution_shadow"))
+    _try("import signal markouts", lambda: __import__("signal_markouts"))
     _try("import forward prediction ledger", lambda: __import__("shadow_forward"))
     _try("import ML promotion gate", lambda: __import__("ml_promotion"))
     _try("import parlay_generator", lambda: __import__("parlay_generator"))

@@ -1,6 +1,6 @@
-import { Activity, ArrowRight, BrainCircuit, ClipboardCheck, FlaskConical, ShieldCheck, Trophy } from 'lucide-react';
+import { Activity, ArrowRight, Crosshair, BrainCircuit, ClipboardCheck, FlaskConical, ShieldCheck, Trophy } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import type { CandidateFunnelReport, ExecutionQualityReport, ExecutionShadowReport, ForwardValidationReport, MlPromotionReport, PracticePerformanceReport, ShadowRankerReport, SignalCalibrationReport } from '@shared/types';
+import type { CandidateFunnelReport, ExecutionQualityReport, ExecutionShadowReport, ForwardValidationReport, MlPromotionReport, PracticePerformanceReport, ShadowRankerReport, SignalCalibrationReport, SignalMarkoutReport } from '@shared/types';
 import { Card, Page, StatCard } from '../components/common';
 import { useApp } from '../state/AppStateProvider';
 import { summarizeEvidence } from '../utils/evidence';
@@ -18,6 +18,8 @@ export function EvidencePage({onNav}:{onNav:(p:PageId)=>void}) {
   const [practice,setPractice]=useState<PracticePerformanceReport|null>(null);
   const [execution,setExecution]=useState<ExecutionQualityReport|null>(null);
   const [executionError,setExecutionError]=useState('');
+  const [markouts,setMarkouts]=useState<SignalMarkoutReport|null>(null);
+  const [markoutError,setMarkoutError]=useState('');
   const [error,setError]=useState('');
   const [funnelError,setFunnelError]=useState('');
   const [shadowError,setShadowError]=useState('');
@@ -30,7 +32,7 @@ export function EvidencePage({onNav}:{onNav:(p:PageId)=>void}) {
   useEffect(()=>{
     let active=true;
     setLoading(true);setError('');setFunnelError('');setShadowError('');setExecutionShadowError('');setForwardError('');setPromotionError('');setPracticeError('');setCalibration(null);setFunnel(null);setShadow(null);setExecutionShadow(null);setForward(null);setPromotion(null);setPractice(null);
-    setExecution(null);setExecutionError('');
+    setExecution(null);setExecutionError('');setMarkouts(null);setMarkoutError('');
     Promise.allSettled([
       window.rom.trading.calibration(),
       window.rom.trading.candidateFunnel(),
@@ -40,7 +42,8 @@ export function EvidencePage({onNav}:{onNav:(p:PageId)=>void}) {
       window.rom.trading.mlPromotion(),
       window.rom.trading.practicePerformance(),
       window.rom.trading.executionQuality(),
-    ]).then(([calibrationResult,funnelResult,shadowResult,executionShadowResult,forwardResult,promotionResult,practiceResult,executionResult])=>{
+      window.rom.trading.signalMarkouts(),
+    ]).then(([calibrationResult,funnelResult,shadowResult,executionShadowResult,forwardResult,promotionResult,practiceResult,executionResult,markoutResult])=>{
       if(!active)return;
       if(calibrationResult.status==='fulfilled')setCalibration(calibrationResult.value);
       else setError(calibrationResult.reason?.message || 'Calibration evidence is unavailable. Try again after reconnecting.');
@@ -58,6 +61,8 @@ export function EvidencePage({onNav}:{onNav:(p:PageId)=>void}) {
       else setPracticeError(practiceResult.reason?.message || 'Practice performance is unavailable. Try again after reconnecting.');
       if(executionResult.status==='fulfilled')setExecution(executionResult.value);
       else setExecutionError(executionResult.reason?.message || 'Execution evidence is unavailable. Start the engine, then refresh evidence.');
+      if(markoutResult.status==='fulfilled')setMarkouts(markoutResult.value);
+      else setMarkoutError(markoutResult.reason?.message || 'Signal markouts are unavailable. Start the engine, then refresh evidence.');
     }).finally(()=>{if(active)setLoading(false);});
     return ()=>{active=false;};
   },[revision]);
@@ -72,6 +77,7 @@ export function EvidencePage({onNav}:{onNav:(p:PageId)=>void}) {
           </dl><p className="mt-4 text-xs leading-5 text-rom-dim">One recorded signal per event. Later outcomes test earlier estimates against market prices. Every live Large Trade and Momentum entry requires a qualified group and a positive margin after fees, regardless of sizing mode. Practice keeps collecting candidates that are not yet qualified. Enable main data collection in Backtest to build this record.</p></>}
         </div>
       </Card>
+      <SignalMarkouts report={markouts} loading={loading} error={markoutError}/>
       <CandidateFunnel report={funnel} loading={loading} error={funnelError}/>
       <ShadowRanker report={shadow} loading={loading} error={shadowError}/>
       <MlPromotion report={promotion} loading={loading} error={promotionError}/>
@@ -153,6 +159,41 @@ function ForwardValidation({report,loading,error}:{report:ForwardValidationRepor
           <Metric label="Resamples" value={report.bootstrapReplicates.toLocaleString()} detail="Deterministic clusters"/>
         </dl>
         <p className="mt-4 text-xs leading-5 text-rom-dim">Confidence bounds resample entire resolution days, so markets sharing one news and liquidity regime do not masquerade as independent proof. Return and drawdown use fixed {report.simulationRiskPct.toFixed(0)}% simulated account risk per selected event. Only the first prediction for each event and model version is retained. Retraining cannot rewrite this scorecard, and it never controls live orders.</p>
+      </>}
+    </div>
+  </Card>;
+}
+
+const MARKOUT_STATUS={
+  collecting:{label:'Collecting',tone:'border-rom-border bg-rom-surface2 text-rom-muted'},
+  predictive:{label:'Beats costs',tone:'border-rom-win/35 bg-rom-win/10 text-rom-win'},
+  no_edge:{label:'No edge shown',tone:'border-amber-400/35 bg-amber-400/10 text-amber-300'},
+  negative:{label:'Loses after costs',tone:'border-rom-loss/40 bg-rom-loss/10 text-rom-lossText'},
+} as const;
+
+const cents=(value:number|null)=>value===null?'—':`${value>=0?'+':''}${value.toFixed(2)}¢`;
+const horizonLabel=(sec:number)=>sec<3600?`${sec/60} min`:`${sec/3600} h`;
+
+function SignalMarkouts({report,loading,error}:{report:SignalMarkoutReport|null;loading:boolean;error:string}) {
+  return <Card>
+    <div className="flex flex-wrap items-start justify-between gap-4">
+      <div className="flex items-start gap-3"><div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-amber-400/10 text-amber-300"><Crosshair className="h-5 w-5"/></div><div><h3 className="text-lg font-semibold">Do the signals predict the price?</h3><p className="mt-1 text-sm text-rom-muted">How far the price moved in each signal's direction, after the cost of acting on it.</p></div></div>
+      <span className="rounded-full border border-rom-border bg-rom-void/40 px-3 py-1.5 text-xs font-medium text-rom-muted">Observation only · no live control</span>
+    </div>
+    <div className="min-h-32 pt-5" aria-live="polite" aria-busy={loading}>
+      {loading&&<p className="text-sm text-rom-muted">Scoring recorded signals against later order books…</p>}
+      {error&&<p role="alert" className="text-sm text-rom-lossText">{error}</p>}
+      {report&&<>
+        <div className="grid gap-4 lg:grid-cols-3">{report.sources.map(source=>{
+          const status=MARKOUT_STATUS[source.status];
+          return <div key={source.source} className={`rounded-xl border p-4 ${source.reference?'border-dashed border-rom-border bg-rom-void/20':'border-rom-border bg-rom-void/30'}`}>
+            <div className="flex flex-wrap items-center justify-between gap-2"><h4 className="text-sm font-semibold">{source.label}</h4><span className={`rom-pill ${status.tone}`}>{status.label}</span></div>
+            <p className="mt-2 text-xs leading-5 text-rom-dim">{source.reason}</p>
+            <dl className="mt-4 grid grid-cols-3 gap-3">{source.horizons.map(h=><Metric key={h.horizonSec} label={`Net · ${horizonLabel(h.horizonSec)}`} value={cents(h.netCents)} detail={`${h.samples} signals · ${h.markets} markets`}/>)}</dl>
+            {(()=>{const h=source.horizons.find(item=>item.horizonSec===report.verdictHorizonSec);return h&&h.grossCents!==null?<p className="mt-3 text-xs text-rom-dim">At {horizonLabel(h.horizonSec)}: price moved {cents(h.grossCents)}, acting cost {cents(h.costCents===null?null:-h.costCents)}.</p>:null;})()}
+          </div>;
+        })}</div>
+        <details className="mt-4 rounded-lg border border-rom-border bg-rom-void/30 px-4 py-2"><summary className="cursor-pointer text-xs font-medium text-rom-muted">How this is measured</summary><p className="pb-2 pt-3 text-xs leading-5 text-rom-dim">Each recorded signal is priced from the order book when it fired and again {report.sources[0]?.horizons.map(h=>horizonLabel(h.horizonSec)).join(', ')} later. Net is the midpoint move in the signal's direction minus half the spread and the taker fee, the cost of acting at once; resting maker orders cost less but do not always fill. Signals in the same market move together, so results are averaged per market and the 95% range is taken across markets. A verdict needs {report.minSamples} signals across {report.minMarkets} markets at {horizonLabel(report.verdictHorizonSec)}, from the last {report.windowDays} days. The reference line follows every trade above $500 and shows what the tape alone predicts. Turn on main data collection in Backtest to record signals. This report cannot approve, size or route an order.</p></details>
       </>}
     </div>
   </Card>;

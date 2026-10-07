@@ -7,7 +7,7 @@ from PyInstaller.utils.hooks import copy_metadata
 from PyInstaller.utils.hooks import collect_all
 
 datas = []
-hiddenimports = ['db', 'scanner', 'trader', 'polymarket_api', 'polymarket_auth', 'categorize', 'config', 'webhook', 'crypto15m', 'crypto15m_trader', 'crypto15m_record', 'backtest', 'indicators', 'clob_ws', 'rules', 'spot_ws', 'rtds_ws', 'replay', 'parlay_generator', 'ws_ssl', 'script_sandbox', 'script_engine', 'script_backtest', 'script_docs', 'script_audit', 'statistics', 'us_market_stream', 'shadow_ranker', 'execution_shadow', 'shadow_forward', 'ml_promotion']
+hiddenimports = ['db', 'scanner', 'trader', 'polymarket_api', 'polymarket_auth', 'categorize', 'config', 'webhook', 'crypto15m', 'crypto15m_trader', 'crypto15m_record', 'backtest', 'indicators', 'clob_ws', 'rules', 'spot_ws', 'rtds_ws', 'replay', 'parlay_generator', 'ws_ssl', 'script_sandbox', 'script_engine', 'script_backtest', 'script_docs', 'script_audit', 'statistics', 'us_market_stream', 'shadow_ranker', 'execution_shadow', 'shadow_forward', 'ml_promotion', 'signal_markouts']
 # Standard-library modules user scripts may import. The sandbox imports them by
 # name at run time, which PyInstaller's analysis cannot see; the --selftest
 # build gate imports each one, so a module that drops out fails the build.

@@ -22,6 +22,7 @@ try {
   for(let visit=0;visit<2;visit++){
     await nav('Evidence');
     await page.getByText('Execution intelligence lab',{exact:true}).waitFor();
+    await page.getByRole('heading',{name:'Do the signals predict the price?'}).waitFor();
     await page.getByText('Evaluating confirmed order and markout evidence…',{exact:true}).waitFor({state:'detached'});
     await nav('Overview');
   }
