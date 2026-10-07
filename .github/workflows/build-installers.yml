@@ -79,6 +79,7 @@ jobs:
         run: npm ci
 
       - name: Production release gate
+        timeout-minutes: 45
         run: npm run release:gate
 
       - name: Build app, bundle backend, package installer
@@ -157,8 +158,10 @@ jobs:
       - name: Install Node dependencies
         run: npm ci
 
-      # On Windows the gate also runs the Electron UI audit.
+      # On Windows the gate also runs the Electron UI audit and every e2e suite
+      # (about 5 minutes locally). The limit turns a hang into a quick failure.
       - name: Production release gate
+        timeout-minutes: 60
         run: npm run release:gate
 
       - name: Build app, bundle backend, package installer

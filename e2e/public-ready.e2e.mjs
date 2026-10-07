@@ -1,5 +1,6 @@
 import {_electron as electron} from 'playwright-core';
 import assert from 'node:assert/strict';
+import {backendRunning} from './wait.mjs';
 import fs from 'node:fs';import os from 'node:os';import path from 'node:path';
 const root=fs.mkdtempSync(path.join(os.tmpdir(),'rom-public-'));
 for(const d of ['Roaming','Local'])fs.mkdirSync(path.join(root,d));
@@ -13,6 +14,9 @@ try{
  assert.ok(await p.getByText('Execution guard',{exact:true}).count());
  await p.screenshot({path:'.work/overview-2.7.png'});
  await p.getByRole('navigation').getByRole('button',{name:'Strategy',exact:true}).click();
+ // Let the real backend finish starting first: a status it reports after the
+ // fixtures below would replace them and leave Start live disabled.
+ await backendRunning(p,90000);
  // Start live also needs qualified evidence and buying power. Supply both as
  // fixtures so the review dialog itself is what this suite exercises.
  await app.evaluate(({ipcMain,BrowserWindow})=>{

@@ -39,4 +39,12 @@ for (const [command, args] of commands) {
   if (result.status !== 0) process.exit(result.status ?? 1);
 }
 
+// An Electron or backend process left behind by a suite keeps the runner's
+// output pipe open, and GitHub then waits on the step until it times out.
+if (process.env.CI && process.platform === 'win32') {
+  for (const image of ['electron.exe', 'rom-polybot-backend.exe', 'python.exe']) {
+    spawnSync('taskkill', ['/F', '/T', '/IM', image], { stdio: 'ignore', windowsHide: true });
+  }
+}
+
 console.log('\n>> RELEASE GATE PASSED');
